@@ -29,6 +29,14 @@ class Settings(BaseSettings):
         return self.storage_dir / "cache" / "stems"
 
     @property
+    def transcriptions_cache_dir(self) -> Path:
+        return self.storage_dir / "cache" / "transcriptions"
+
+    @property
+    def models_dir(self) -> Path:
+        return self.storage_dir / "models"
+
+    @property
     def tmp_dir(self) -> Path:
         return self.storage_dir / "tmp"
 

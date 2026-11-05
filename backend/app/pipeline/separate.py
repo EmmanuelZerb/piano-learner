@@ -5,7 +5,6 @@ manifest.json est écrit en dernier : sa présence signifie que le cache est com
 """
 
 import json
-import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,6 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from app.pipeline.gpu import gpu_lock
 
 if TYPE_CHECKING:
     import torch
@@ -24,9 +25,6 @@ MANIFEST = "manifest.json"
 STEM_EXT = ".flac"
 
 ProgressFn = Callable[[float], None]
-
-# Un seul modèle sur le GPU à la fois (8 Go de VRAM ne suffisent pas pour deux séparations).
-_gpu_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -114,7 +112,7 @@ def separate(
         return SeparationResult(existing, cached=True)
 
     start = time.perf_counter()
-    with _gpu_lock:
+    with gpu_lock:
         names, sources = _run_model(_read_wav(wav_path), device, on_progress)
 
     out_dir.mkdir(parents=True, exist_ok=True)

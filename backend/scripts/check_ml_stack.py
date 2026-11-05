@@ -87,32 +87,18 @@ def check_basic_pitch(wav_path: Path) -> str:
     return f"modèle={model}, {len(notes)} notes, hauteurs={pitches}"
 
 
-BYTEDANCE_URL = "https://zenodo.org/records/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1"
-
-
-def bytedance_checkpoint() -> Path:
-    """La lib télécharge son checkpoint via `wget` (absent sous Windows) : on le fait nous-mêmes."""
-    import urllib.request
-
-    from app.config import get_settings
-
-    path = get_settings().storage_dir / "models" / "bytedance_piano_note_pedal.pth"
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".part")
-        urllib.request.urlretrieve(BYTEDANCE_URL, tmp)
-        tmp.rename(path)
-    return path
-
-
 def check_bytedance(wav_path: Path) -> str:
     import librosa
     import torch
     from piano_transcription_inference import PianoTranscription, sample_rate
 
+    from app.config import get_settings
+    from app.pipeline.transcribe import ensure_bytedance_checkpoint
+
     audio, _ = librosa.load(str(wav_path), sr=sample_rate, mono=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    transcriptor = PianoTranscription(device=device, checkpoint_path=str(bytedance_checkpoint()))
+    checkpoint = ensure_bytedance_checkpoint(get_settings().models_dir)
+    transcriptor = PianoTranscription(device=device, checkpoint_path=str(checkpoint))
     midi_out = wav_path.with_suffix(".mid")
     result = transcriptor.transcribe(audio, str(midi_out))
     events = result["est_note_events"]

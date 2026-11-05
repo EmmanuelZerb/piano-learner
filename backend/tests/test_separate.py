@@ -15,22 +15,6 @@ torch = pytest.importorskip("torch")
 sf = pytest.importorskip("soundfile")
 
 
-@pytest.fixture
-def fake_model(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Remplace Demucs par un modèle factice ; renvoie un compteur d'appels."""
-    calls: list[int] = []
-
-    def run(mix, device, on_progress):  # type: ignore[no-untyped-def]
-        calls.append(mix.shape[-1])
-        if on_progress:
-            on_progress(0.5)
-        out = torch.stack([mix * (i + 1) / 10 for i in range(len(sep.STEMS))])
-        return list(sep.STEMS), out
-
-    monkeypatch.setattr(sep, "_run_model", run)
-    return calls
-
-
 def _wav(tmp_path: Path, seconds: float = 0.5) -> Path:
     path = tmp_path / "audio.wav"
     t = torch.arange(int(44100 * seconds)) / 44100

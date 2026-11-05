@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { StemsPanel } from "@/components/StemsPanel";
+import { TranscriptionPanel } from "@/components/TranscriptionPanel";
 import { getTrack, mediaUrl, type Track } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 
@@ -12,6 +13,8 @@ export function TrackDetail() {
   const { id } = useParams<{ id: string }>();
   const [track, setTrack] = useState<Track | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // La transcription peut déclencher la séparation : on recharge alors la liste des stems.
+  const [stemsVersion, setStemsVersion] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -54,7 +57,8 @@ export function TrackDetail() {
         <audio controls preload="none" src={mediaUrl(track.audio_url)} className="w-full" />
       </section>
 
-      <StemsPanel track={track} onTrackChange={setTrack} />
+      <StemsPanel key={stemsVersion} track={track} onTrackChange={setTrack} />
+      <TranscriptionPanel track={track} onTranscribed={() => setStemsVersion((v) => v + 1)} />
     </>
   );
 }

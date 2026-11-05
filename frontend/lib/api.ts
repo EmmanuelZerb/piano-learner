@@ -122,6 +122,43 @@ export function separateTrack(id: string): Promise<Stems> {
   return request<Stems>(`/tracks/${id}/separate`, { method: "POST" });
 }
 
+export type TranscribeParams = {
+  piano_engine: "bytedance" | "basic_pitch";
+  piano: { onset_threshold: number; offset_threshold: number; frame_threshold: number };
+  basic_pitch: { onset_threshold: number; frame_threshold: number; min_note_ms: number };
+};
+
+export type Transcription = {
+  available: boolean;
+  stems: {
+    stem: string;
+    engine: string;
+    notes: number;
+    pedals: number;
+    cached: boolean;
+    midi_url: string;
+  }[];
+  merged_url: string | null;
+  params: TranscribeParams | null;
+  elapsed_s: number | null;
+};
+
+export function getTranscriptionDefaults(signal?: AbortSignal): Promise<TranscribeParams> {
+  return request<TranscribeParams>("/transcription/defaults", { signal });
+}
+
+export function getTranscription(id: string, signal?: AbortSignal): Promise<Transcription> {
+  return request<Transcription>(`/tracks/${id}/transcription`, { signal });
+}
+
+export function transcribeTrack(id: string, params: TranscribeParams): Promise<Transcription> {
+  return request<Transcription>(`/tracks/${id}/transcribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ params }),
+  });
+}
+
 export function describeDevice(device: DeviceInfo): string {
   if (!device.torch_installed) return "torch non installé (uv sync)";
   if (device.device === "cpu") return "CPU (aucun GPU détecté)";

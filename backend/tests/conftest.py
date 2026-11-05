@@ -22,6 +22,25 @@ def client(settings: Settings) -> TestClient:
     return TestClient(create_app(settings))
 
 
+@pytest.fixture
+def fake_model(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Remplace Demucs par un modèle factice ; renvoie un compteur d'appels."""
+    torch = pytest.importorskip("torch")
+    import app.pipeline.separate as sep
+
+    calls: list[int] = []
+
+    def run(mix, device, on_progress):  # type: ignore[no-untyped-def]
+        calls.append(mix.shape[-1])
+        if on_progress:
+            on_progress(0.5)
+        out = torch.stack([mix * (i + 1) / 10 for i in range(len(sep.STEMS))])
+        return list(sep.STEMS), out
+
+    monkeypatch.setattr(sep, "_run_model", run)
+    return calls
+
+
 AudioFactory = Callable[..., Path]
 
 

@@ -9,8 +9,9 @@ Application web locale et personnelle. Elle prend un audio (fichier ou URL YouTu
 | 0 — Initialisation (monorepo, `/health`, test de la stack ML) | ✅ |
 | 1 — Ingestion audio (upload + YouTube → WAV 44,1 kHz) | ✅ |
 | 2 — Séparation des sources (Demucs htdemucs_6s, cache par hash) | ✅ |
-| 3 — Transcription (ByteDance + Basic Pitch) | ⏳ à faire |
-| 4–9 | voir le cahier des charges (post-traitement, API async, lecteur, entraînement, bibliothèque, finitions) |
+| 3 — Transcription (ByteDance + Basic Pitch, cache par paramètres) | ✅ |
+| 4 — Post-traitement (tempo, quantification, mains, niveaux) | ⏳ à faire |
+| 5–9 | voir le cahier des charges (API async, lecteur, entraînement, bibliothèque, finitions) |
 
 ## Architecture
 
@@ -25,17 +26,25 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/api/deps.py        Dépendances communes (session, settings, get_track_or_404)
   app/api/tracks.py      Routes /tracks : upload, youtube, liste, détail, PATCH sélection, audio, miniature
   app/api/stems.py       Routes /tracks/{id}/separate, /stems, /stems/{name}
+  app/api/transcription.py  /tracks/{id}/transcribe (sépare si besoin), /transcription, /midi/{f}.mid, /transcription/defaults
   app/pipeline/ingest.py Validation (octets d'en-tête + ffprobe), yt-dlp, normalisation ffmpeg
   app/pipeline/errors.py PipelineError(code, message, status) → {code, detail}
   app/pipeline/separate.py Demucs htdemucs_6s, cache par hash, verrou GPU, stems FLAC 24 bits
-  app/pipeline/          (phases 3+) transcribe, postprocess, jobs
+  app/pipeline/gpu.py    Verrou GPU partagé (Demucs, ByteDance)
+  app/pipeline/notes.py  Format pivot Note/Pedal/StemTranscription (JSON) : entrée du post-traitement
+  app/pipeline/transcribe.py  ByteDance (piano) / Basic Pitch (autres), paramètres, cache, manifest
+  app/pipeline/midi_io.py  Export pretty_midi : un instrument (= un canal) par stem, CC64 pour la pédale
+  app/pipeline/          (phases 4+) postprocess, jobs
   scripts/doctor.py      Diagnostic des prérequis
   scripts/check_ml_stack.py  Test de cohabitation et d'inférence des 3 modèles ML
-  tests/                 pytest
+  tests/                 pytest ; tests/synth.py = audio de test (synthé additif, Salamander, F1 mir_eval)
   storage/               Généré, ignoré par git :
     app.db               SQLite
     tracks/{id}/         source.<ext>, audio.wav (stéréo 44,1 kHz s16), thumbnail.jpg
     cache/stems/{wav_sha256}/htdemucs_6s/  {stem}.flac + manifest.json (écrit en dernier = cache complet)
+    cache/transcriptions/{wav_sha256}/{stem}-{moteur}-{hash params}.json  notes brutes
+    tracks/{id}/midi/    {stem}.mid, merged.mid, manifest.json (dernière transcription)
+    models/salamander-test/  échantillons de piano pour le test ByteDance
     tmp/                 dossiers de travail (vidés automatiquement)
     models/              checkpoints (ByteDance…)
 frontend/                Next.js 16 (App Router), React 19, TS strict, Tailwind 4, vitest
@@ -50,7 +59,8 @@ package.json (racine)    Orchestration uniquement (concurrently)
 ```
 npm install && npm run setup   # deps racine, venv backend (groupe ml inclus, torch CUDA), deps frontend
 npm run dev                    # API sur http://127.0.0.1:8000 + web sur http://localhost:3000
-npm test                       # pytest + vitest
+npm test                       # pytest (sans ml/network) + vitest
+npm run test:full              # tous les tests, y compris modèles réels et réseau (environ 1 min)
 npm run lint                   # ruff check/format + eslint + prettier + tsc
 npm run format                 # ruff format + prettier --write
 npm run doctor                 # diagnostic ffmpeg / Node / torch / GPU
@@ -73,8 +83,13 @@ Les tests `network` et `ml` sont exclus par défaut. Pour les lancer : `uv run p
 - **torch / torchaudio < 2.9**, wheels **cu126** (index `pytorch-cu126` dans `pyproject.toml`) : demucs dépend des backends d'écriture torchaudio retirés en 2.9. Pour écrire les WAV, utiliser `soundfile`, pas `torchaudio.save`.
 - **Basic Pitch sans TensorFlow** : sous Windows / Python 3.11, basic-pitch 0.4 exige TF 2.14, qui n'est pas installable. On l'exclut via `[tool.uv] override-dependencies`, et basic-pitch utilise automatiquement `nmp.onnx` avec `onnxruntime` (sur CPU). Les warnings « Coremltools/TFLite/Tensorflow is not installed » sont normaux.
 - **`setuptools<81`** : `resampy` (une dépendance de basic-pitch) importe `pkg_resources`.
-- **Checkpoint ByteDance** : la lib le télécharge avec `wget`, absent sous Windows. On le télécharge nous-mêmes dans `storage/models/` et on passe `checkpoint_path=` (voir `check_ml_stack.bytedance_checkpoint`, à déplacer dans `app/pipeline` en phase 3).
-- ByteDance transcrit mal les sinusoïdes (il est entraîné sur du piano réel) : les tests de précision de la phase 3 doivent utiliser un vrai timbre de piano.
+- **Checkpoint ByteDance** : la lib le télécharge avec `wget`, absent sous Windows. `transcribe.ensure_bytedance_checkpoint` le télécharge dans `storage/models/`. Les seuils se règlent par attributs de l'instance, et l'attribut `offset_threshod` est bien écrit ainsi dans la lib.
+- **Précision mesurée** (gamme de do, F1 mir_eval, onset à ±50 ms) :
+  - Basic Pitch : 100 % sur le synthé additif, 94 % sur les échantillons Salamander.
+  - ByteDance : 100 % sur Salamander, mais seulement 82 % sur le synthé additif, parce qu'il est entraîné sur du vrai piano. Son test utilise donc `render_with_samples`.
+  - Transposer un échantillon **vers le haut** fait apparaître des octaves fantômes chez ByteDance : le rendu de test ne transpose que vers le bas.
+- **Cache de transcription** : la clé contient le stem, le moteur et les paramètres propres à ce moteur. Changer un seuil Basic Pitch ne relance donc pas ByteDance. `TranscribeParams` (Pydantic) sert à la fois au pipeline et à l'API.
+- Basic Pitch fragmente beaucoup et produit des doublons à l'octave sur la basse : c'est attendu, et le nettoyage se fait en phase 4. Sur un mixage synthétique, Demucs range les accords dans `other`, et la piste piano peut alors rester vide.
 - La piste `piano` de `htdemucs_6s` est de qualité médiocre : toujours permettre de transcrire `other`.
 - **Next.js 16** : les API diffèrent des versions connues. Lire `frontend/AGENTS.md` et `frontend/node_modules/next/dist/docs/` avant d'écrire du code Next.
 - Le chemin du projet contient un espace (`D:\Logiciel Piano`) : toujours mettre les chemins entre guillemets dans les scripts.

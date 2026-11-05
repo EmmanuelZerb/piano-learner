@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from app.api.stems import router as stems_router
 from app.api.tracks import router as tracks_router
+from app.api.transcription import router as transcription_router
 from app.config import Settings, get_settings
 from app.db import make_engine
 from app.pipeline.errors import PipelineError
@@ -39,6 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(PipelineError, pipeline_error_handler)
     app.include_router(tracks_router)
     app.include_router(stems_router)
+    app.include_router(transcription_router)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
