@@ -32,6 +32,15 @@ export type Track = {
   created_at: string;
   audio_url: string;
   thumbnail_url: string | null;
+  transcribe_stems: string[];
+};
+
+export type Stems = {
+  model: string;
+  available: boolean;
+  stems: { name: string; url: string }[];
+  cached: boolean | null;
+  elapsed_s: number | null;
 };
 
 export type TrackCreated = { track: Track; duplicate: boolean };
@@ -93,8 +102,28 @@ export function importYoutube(url: string): Promise<TrackCreated> {
   });
 }
 
+export function getTrack(id: string, signal?: AbortSignal): Promise<Track> {
+  return request<Track>(`/tracks/${id}`, { signal });
+}
+
+export function updateTranscribeStems(id: string, stems: string[]): Promise<Track> {
+  return request<Track>(`/tracks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transcribe_stems: stems }),
+  });
+}
+
+export function getStems(id: string, signal?: AbortSignal): Promise<Stems> {
+  return request<Stems>(`/tracks/${id}/stems`, { signal });
+}
+
+export function separateTrack(id: string): Promise<Stems> {
+  return request<Stems>(`/tracks/${id}/separate`, { method: "POST" });
+}
+
 export function describeDevice(device: DeviceInfo): string {
-  if (!device.torch_installed) return "torch non installé (uv sync --extra ml)";
+  if (!device.torch_installed) return "torch non installé (uv sync)";
   if (device.device === "cpu") return "CPU (aucun GPU détecté)";
   const vram = device.vram_gb ? ` · ${device.vram_gb} Go` : "";
   return `${device.device.toUpperCase()} · ${device.name ?? "?"}${vram}`;

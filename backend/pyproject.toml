@@ -13,25 +13,8 @@ dependencies = [
     "yt-dlp[default]>=2026.10.26",
 ]
 
-[project.optional-dependencies]
-# Stack ML lourde : `uv sync --extra ml`. torch/torchaudio < 2.9 car demucs utilise
-# les backends d'écriture torchaudio retirés en 2.9.
-ml = [
-    "torch>=2.5,<2.9",
-    "torchaudio>=2.5,<2.9",
-    "demucs>=4.0.1",
-    "basic-pitch>=0.4.0",
-    "onnxruntime>=1.18",
-    # resampy (dépendance de basic-pitch) importe pkg_resources, retiré des setuptools récents.
-    "setuptools<81",
-    "piano-transcription-inference>=0.0.6",
-    "librosa>=0.10",
-    "pretty-midi>=0.2.10",
-    "mido>=1.3",
-    "soundfile>=0.12",
-]
-
 [tool.uv]
+default-groups = ["dev", "ml"]
 # basic-pitch 0.4 impose TensorFlow 2.14 en Python 3.11, non installable sous Windows.
 # On le retire et basic-pitch utilise automatiquement son modèle ONNX (onnxruntime).
 override-dependencies = ["tensorflow; sys_platform == 'never'"]
@@ -46,6 +29,23 @@ url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [dependency-groups]
+# Stack ML lourde, installée par défaut (default-groups). Machine sans GPU ni ML :
+# `uv sync --no-group ml`. torch/torchaudio < 2.9 car demucs utilise les backends
+# d'écriture torchaudio retirés en 2.9.
+ml = [
+    "torch>=2.5,<2.9",
+    "torchaudio>=2.5,<2.9",
+    "demucs>=4.0.1",
+    "basic-pitch>=0.4.0",
+    "onnxruntime>=1.18",
+    # resampy (dépendance de basic-pitch) importe pkg_resources, retiré des setuptools récents.
+    "setuptools<81",
+    "piano-transcription-inference>=0.0.6",
+    "librosa>=0.10",
+    "pretty-midi>=0.2.10",
+    "mido>=1.3",
+    "soundfile>=0.12",
+]
 dev = [
     "httpx2>=2.16.0",
     "pytest>=8.3",

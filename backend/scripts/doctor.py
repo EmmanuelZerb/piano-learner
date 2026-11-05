@@ -23,7 +23,7 @@ def main() -> int:
         ("ffmpeg", ffmpeg_info().available, ffmpeg_info().version or "absent"),
         ("ffprobe", ffprobe_info().available, ffprobe_info().path or "absent"),
         ("Node >= 20", node_ok, node or "absent"),
-        ("torch", device.torch_installed, device.torch_version or "uv sync --extra ml"),
+        ("torch", device.torch_installed, device.torch_version or "uv sync"),
         ("GPU", device.device != "cpu", f"{device.device} {device.name or ''}".strip()),
     ]
     for name, ok, detail in checks:

@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import BinaryIO
 from urllib.parse import parse_qs, urlparse
 
+from app.pipeline.errors import PipelineError
+
 WAV_NAME = "audio.wav"
 THUMBNAIL_NAME = "thumbnail.jpg"
 SAMPLE_RATE = 44100
@@ -21,16 +23,6 @@ CHANNELS = 2
 
 ALLOWED_FORMATS = {"mp3", "wav", "flac", "m4a"}
 _CHUNK = 1024 * 1024
-
-
-class IngestError(Exception):
-    """Erreur présentable à l'utilisateur. `code` est stable, `message` est en français."""
-
-    def __init__(self, code: str, message: str, status_code: int = 422) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -79,14 +71,14 @@ def save_stream(src: BinaryIO, dest: Path, max_bytes: int) -> int:
             if written > max_bytes:
                 out.close()
                 dest.unlink(missing_ok=True)
-                raise IngestError(
+                raise PipelineError(
                     "too_large",
                     f"Fichier trop volumineux (limite : {max_bytes // (1024 * 1024)} Mo).",
                     413,
                 )
             out.write(chunk)
     if written == 0:
-        raise IngestError("empty_file", "Le fichier est vide.", 400)
+        raise PipelineError("empty_file", "Le fichier est vide.", 400)
     return written
 
 
@@ -101,7 +93,7 @@ def probe_audio(path: Path) -> AudioProbe:
     streams = data.get("streams") or []
     duration = float(data.get("format", {}).get("duration") or 0)
     if not streams or duration <= 0:
-        raise IngestError("no_audio", "Aucune piste audio lisible dans ce fichier.", 415)
+        raise PipelineError("no_audio", "Aucune piste audio lisible dans ce fichier.", 415)
     stream = streams[0]
     raw_tags = {**data["format"].get("tags", {}), **stream.get("tags", {})}
     return AudioProbe(
@@ -116,7 +108,7 @@ def probe_audio(path: Path) -> AudioProbe:
 def check_duration(duration_s: float, max_duration_s: float) -> None:
     if duration_s > max_duration_s:
         minutes, limit = duration_s / 60, max_duration_s / 60
-        raise IngestError(
+        raise PipelineError(
             "too_long", f"Morceau trop long ({minutes:.0f} min, limite : {limit:.0f} min)."
         )
 
@@ -129,7 +121,7 @@ def normalize_to_wav(src: Path, dest: Path) -> None:
     ]  # fmt: skip
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
     if result.returncode != 0:
-        raise IngestError("conversion_failed", f"Échec de la conversion ffmpeg : {result.stderr}")
+        raise PipelineError("conversion_failed", f"Échec de la conversion ffmpeg : {result.stderr}")
 
 
 def sha256_file(path: Path) -> str:
@@ -150,7 +142,7 @@ def ingest_upload(
     with source.open("rb") as f:
         fmt = sniff_audio_format(f.read(16))
     if fmt not in ALLOWED_FORMATS:
-        raise IngestError(
+        raise PipelineError(
             "unsupported_format",
             "Format non reconnu : seuls les vrais fichiers MP3, WAV, FLAC et M4A sont acceptés.",
             415,
@@ -179,7 +171,7 @@ def validate_youtube_url(url: str) -> str:
     parsed = urlparse(url.strip())
     host = (parsed.hostname or "").lower()
     if parsed.scheme not in {"http", "https"} or (host not in _YT_HOSTS and host != "youtu.be"):
-        raise IngestError("invalid_url", "Ce n'est pas une URL YouTube valide.")
+        raise PipelineError("invalid_url", "Ce n'est pas une URL YouTube valide.")
 
     video_id: str | None = None
     if host == "youtu.be":
@@ -189,10 +181,10 @@ def validate_youtube_url(url: str) -> str:
     elif parsed.path.startswith(_YT_PATH_PREFIXES):
         video_id = parsed.path.split("/")[2]
     elif parsed.path == "/playlist":
-        raise IngestError("playlist", "Les playlists ne sont pas acceptées : choisis une vidéo.")
+        raise PipelineError("playlist", "Les playlists ne sont pas acceptées : choisis une vidéo.")
 
     if not video_id or not _YT_ID.match(video_id):
-        raise IngestError("invalid_url", "Impossible de trouver l'identifiant de la vidéo.")
+        raise PipelineError("invalid_url", "Impossible de trouver l'identifiant de la vidéo.")
     return video_id
 
 
@@ -226,12 +218,12 @@ _YT_ERRORS: list[tuple[tuple[str, ...], str, str]] = [
 ]
 
 
-def classify_youtube_error(message: str) -> IngestError:
+def classify_youtube_error(message: str) -> PipelineError:
     lowered = message.lower()
     for needles, code, text in _YT_ERRORS:
         if any(n in lowered for n in needles):
-            return IngestError(code, text)
-    return IngestError("download_failed", f"Échec du téléchargement YouTube : {message}", 502)
+            return PipelineError(code, text)
+    return PipelineError("download_failed", f"Échec du téléchargement YouTube : {message}", 502)
 
 
 def _artist_from_info(info: dict) -> str | None:
@@ -266,7 +258,7 @@ def download_youtube(video_id: str, work_dir: Path, max_duration_s: float) -> tu
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(canonical_youtube_url(video_id), download=False)
             if info.get("is_live"):
-                raise IngestError("live", "Les directs ne sont pas acceptés.")
+                raise PipelineError("live", "Les directs ne sont pas acceptés.")
             check_duration(float(info.get("duration") or 0), max_duration_s)
             info = ydl.process_ie_result(info, download=True)
     except DownloadError as exc:
@@ -274,7 +266,7 @@ def download_youtube(video_id: str, work_dir: Path, max_duration_s: float) -> tu
 
     downloads = info.get("requested_downloads") or []
     if not downloads or not Path(downloads[0]["filepath"]).exists():
-        raise IngestError("download_failed", "yt-dlp n'a produit aucun fichier audio.", 502)
+        raise PipelineError("download_failed", "yt-dlp n'a produit aucun fichier audio.", 502)
     return Path(downloads[0]["filepath"]), info
 
 

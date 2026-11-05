@@ -2,7 +2,12 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel
+
+# La « prod » sans voix ni batterie. La batterie n'est jamais transcriptible en notes.
+DEFAULT_TRANSCRIBE_STEMS = ["piano", "other", "bass"]
+TRANSCRIBABLE_STEMS = {"piano", "other", "bass", "guitar", "vocals"}
 
 
 class TrackSource(StrEnum):
@@ -32,3 +37,9 @@ class Track(SQLModel, table=True):
     wav_sha256: str = Field(index=True, unique=True)
     has_thumbnail: bool = False
     created_at: datetime = Field(default_factory=_now)
+    # None = sélection par défaut (DEFAULT_TRANSCRIBE_STEMS).
+    transcribe_stems: list[str] | None = Field(default=None, sa_column=Column(JSON))
+
+    @property
+    def stems_to_transcribe(self) -> list[str]:
+        return self.transcribe_stems or list(DEFAULT_TRANSCRIBE_STEMS)

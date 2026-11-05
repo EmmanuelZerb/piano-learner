@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { listTracks, mediaUrl, type Track } from "@/lib/api";
@@ -23,7 +24,9 @@ function TrackRow({ track }: { track: Track }) {
       )}
       <div className="min-w-0 flex-1 space-y-2">
         <div>
-          <p className="truncate font-medium">{track.title}</p>
+          <Link href={`/tracks/${track.id}`} className="block truncate font-medium hover:underline">
+            {track.title}
+          </Link>
           <p className="truncate text-sm text-zinc-500">
             {[
               track.artist,

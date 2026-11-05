@@ -25,6 +25,10 @@ class Settings(BaseSettings):
         return self.storage_dir / "tracks"
 
     @property
+    def stems_cache_dir(self) -> Path:
+        return self.storage_dir / "cache" / "stems"
+
+    @property
     def tmp_dir(self) -> Path:
         return self.storage_dir / "tmp"
 

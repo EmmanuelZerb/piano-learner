@@ -1,27 +1,17 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from sqlmodel import Session, select
+from pydantic import BaseModel, field_validator
+from sqlmodel import select
 
-from app.config import Settings
-from app.db import get_session
+from app.api.deps import SessionDep, SettingsDep, get_track_or_404
 from app.library import register_track, track_dir, work_dir
-from app.models import Track, TrackSource
+from app.models import TRANSCRIBABLE_STEMS, Track, TrackSource
 from app.pipeline.ingest import THUMBNAIL_NAME, WAV_NAME, ingest_upload, ingest_youtube
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
-
-SessionDep = Annotated[Session, Depends(get_session)]
-
-
-def get_app_settings(request: Request) -> Settings:
-    return request.app.state.settings
-
-
-SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 
 
 class TrackRead(BaseModel):
@@ -35,14 +25,16 @@ class TrackRead(BaseModel):
     created_at: datetime
     audio_url: str
     thumbnail_url: str | None
+    transcribe_stems: list[str]
 
     @classmethod
     def from_track(cls, track: Track) -> "TrackRead":
         base = f"/tracks/{track.id}"
         return cls(
-            **track.model_dump(exclude={"wav_sha256", "has_thumbnail"}),
+            **track.model_dump(exclude={"wav_sha256", "has_thumbnail", "transcribe_stems"}),
             audio_url=f"{base}/audio",
             thumbnail_url=f"{base}/thumbnail" if track.has_thumbnail else None,
+            transcribe_stems=track.stems_to_transcribe,
         )
 
 
@@ -55,11 +47,18 @@ class YouTubeImport(BaseModel):
     url: str
 
 
-def _get_track(session: Session, track_id: str) -> Track:
-    track = session.get(Track, track_id)
-    if track is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Morceau introuvable.")
-    return track
+class TrackUpdate(BaseModel):
+    transcribe_stems: list[str]
+
+    @field_validator("transcribe_stems")
+    @classmethod
+    def check_stems(cls, stems: list[str]) -> list[str]:
+        if not stems:
+            raise ValueError("Choisis au moins une piste à transcrire.")
+        unknown = set(stems) - TRANSCRIBABLE_STEMS
+        if unknown:
+            raise ValueError(f"Pistes non transcriptibles : {', '.join(sorted(unknown))}.")
+        return sorted(set(stems), key=stems.index)
 
 
 # Routes synchrones : FastAPI les exécute dans un pool de threads (ffmpeg / yt-dlp bloquants).
@@ -98,18 +97,28 @@ def list_tracks(session: SessionDep) -> list[TrackRead]:
 
 @router.get("/{track_id}", response_model=TrackRead)
 def get_track(track_id: str, session: SessionDep) -> TrackRead:
-    return TrackRead.from_track(_get_track(session, track_id))
+    return TrackRead.from_track(get_track_or_404(session, track_id))
+
+
+@router.patch("/{track_id}", response_model=TrackRead)
+def update_track(track_id: str, body: TrackUpdate, session: SessionDep) -> TrackRead:
+    track = get_track_or_404(session, track_id)
+    track.transcribe_stems = body.transcribe_stems
+    session.add(track)
+    session.commit()
+    session.refresh(track)
+    return TrackRead.from_track(track)
 
 
 @router.get("/{track_id}/audio")
 def get_track_audio(track_id: str, session: SessionDep, settings: SettingsDep) -> FileResponse:
-    track = _get_track(session, track_id)
+    track = get_track_or_404(session, track_id)
     return FileResponse(track_dir(settings, track.id) / WAV_NAME, media_type="audio/wav")
 
 
 @router.get("/{track_id}/thumbnail")
 def get_track_thumbnail(track_id: str, session: SessionDep, settings: SettingsDep) -> FileResponse:
-    track = _get_track(session, track_id)
+    track = get_track_or_404(session, track_id)
     path = track_dir(settings, track.id) / THUMBNAIL_NAME
     if not track.has_thumbnail or not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Pas de miniature.")

@@ -3,10 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.api.stems import router as stems_router
 from app.api.tracks import router as tracks_router
 from app.config import Settings, get_settings
 from app.db import make_engine
-from app.pipeline.ingest import IngestError
+from app.pipeline.errors import PipelineError
 from app.system import DeviceInfo, ToolInfo, device_info, ffmpeg_info, ffprobe_info
 
 
@@ -17,8 +18,8 @@ class HealthResponse(BaseModel):
     device: DeviceInfo
 
 
-async def ingest_error_handler(_: Request, exc: Exception) -> JSONResponse:
-    assert isinstance(exc, IngestError)
+async def pipeline_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, PipelineError)
     return JSONResponse({"code": exc.code, "detail": exc.message}, status_code=exc.status_code)
 
 
@@ -35,8 +36,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_exception_handler(IngestError, ingest_error_handler)
+    app.add_exception_handler(PipelineError, pipeline_error_handler)
     app.include_router(tracks_router)
+    app.include_router(stems_router)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:

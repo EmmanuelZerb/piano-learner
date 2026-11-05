@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.pipeline.ingest import (
-    IngestError,
+    PipelineError,
     classify_youtube_error,
     ingest_upload,
     normalize_to_wav,
@@ -38,7 +38,7 @@ def test_sniff_audio_format(header: bytes, expected: str | None) -> None:
 
 def test_save_stream_rejects_oversized(tmp_path: Path) -> None:
     dest = tmp_path / "f.bin"
-    with pytest.raises(IngestError) as err:
+    with pytest.raises(PipelineError) as err:
         save_stream(io.BytesIO(b"x" * 2048), dest, max_bytes=1024)
     assert err.value.code == "too_large"
     assert err.value.status_code == 413
@@ -46,13 +46,13 @@ def test_save_stream_rejects_oversized(tmp_path: Path) -> None:
 
 
 def test_save_stream_rejects_empty(tmp_path: Path) -> None:
-    with pytest.raises(IngestError) as err:
+    with pytest.raises(PipelineError) as err:
         save_stream(io.BytesIO(b""), tmp_path / "f.bin", max_bytes=1024)
     assert err.value.code == "empty_file"
 
 
 def test_fake_mp3_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(IngestError) as err:
+    with pytest.raises(PipelineError) as err:
         ingest_upload(io.BytesIO(b"not really audio" * 10), "song.mp3", tmp_path, 10**6, 600)
     assert err.value.code == "unsupported_format"
 
@@ -60,7 +60,7 @@ def test_fake_mp3_is_rejected(tmp_path: Path) -> None:
 @requires_ffmpeg
 def test_truncated_file_with_valid_header_is_rejected(tmp_path: Path) -> None:
     fake = b"RIFF\x24\x08\x00\x00WAVE" + b"\x00" * 64
-    with pytest.raises(IngestError) as err:
+    with pytest.raises(PipelineError) as err:
         ingest_upload(io.BytesIO(fake), "x.wav", tmp_path, 10**6, 600)
     assert err.value.code == "no_audio"
 
@@ -89,7 +89,7 @@ def test_ingest_upload_reads_tags_and_checks_duration(make_audio: AudioFactory, 
     assert (audio.title, audio.artist) == ("Ma chanson", "Moi")
     assert (work / "audio.wav").exists()
 
-    with src.open("rb") as f, pytest.raises(IngestError) as err:
+    with src.open("rb") as f, pytest.raises(PipelineError) as err:
         ingest_upload(f, "fichier.mp3", tmp_path / "work", 10**7, max_duration_s=1)
     assert err.value.code == "too_long"
 
@@ -130,7 +130,7 @@ def test_validate_youtube_url_accepts_videos(url: str) -> None:
     ],
 )
 def test_validate_youtube_url_rejects(url: str, code: str) -> None:
-    with pytest.raises(IngestError) as err:
+    with pytest.raises(PipelineError) as err:
         validate_youtube_url(url)
     assert err.value.code == code
 
