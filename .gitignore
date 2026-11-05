@@ -1,0 +1,35 @@
+# Données générées et modèles (jamais dans git)
+storage/
+backend/storage/
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+*.pth
+*.th
+*.ckpt
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Env / OS / IDE
+.env
+.env.local
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

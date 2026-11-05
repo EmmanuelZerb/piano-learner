@@ -1,0 +1,21 @@
+{
+  "name": "piano-learner",
+  "private": true,
+  "description": "Orchestration du monorepo (backend Python via uv + frontend Next.js)",
+  "scripts": {
+    "setup": "uv --directory backend sync --extra ml && npm --prefix frontend install",
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "uv --directory backend run --extra ml uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:web": "npm --prefix frontend run dev",
+    "test": "npm run test:api && npm run test:web",
+    "test:api": "uv --directory backend run pytest",
+    "test:web": "npm --prefix frontend test",
+    "lint": "uv --directory backend run ruff check . && uv --directory backend run ruff format --check . && npm --prefix frontend run lint && npm --prefix frontend run typecheck",
+    "format": "uv --directory backend run ruff format . && npm --prefix frontend run format",
+    "doctor": "uv --directory backend run --extra ml python -m scripts.doctor",
+    "check:ml": "uv --directory backend run --extra ml python -m scripts.check_ml_stack --models"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}
