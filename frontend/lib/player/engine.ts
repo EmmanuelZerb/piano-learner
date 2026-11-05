@@ -10,15 +10,19 @@ import * as Tone from "tone";
 
 import { sustainedEnds, type ArrangementData, type Hand } from "@/lib/player/notes";
 import { SALAMANDER_URLS } from "@/lib/player/samples.mjs";
+import {
+  beatPeriod,
+  PPQ,
+  secondsToTicks,
+  tickTime,
+  transportBpm,
+  waitPointTime,
+} from "@/lib/player/timing";
 
-const PPQ = 960; // résolution ≈ 1 ms
-const BASE_BPM = 60;
 const START_DELAY_S = 0.05;
 
 type NoteEvent = { time: string; type: "on" | "off"; note: string; velocity: number; hand: Hand };
 type AccompanimentNode = Tone.Player | Tone.GrainPlayer;
-
-const ticks = (seconds: number) => `${Math.max(0, Math.round(seconds * PPQ))}i`;
 
 export class PlayerEngine {
   readonly ready: Promise<void>;
@@ -53,7 +57,7 @@ export class PlayerEngine {
     this.transport.stop();
     this.transport.cancel();
     this.transport.PPQ = PPQ;
-    this.transport.bpm.value = BASE_BPM;
+    this.transport.bpm.value = transportBpm(1);
     this.transport.loop = false;
     this.sampler = new Tone.Sampler({
       urls: SALAMANDER_URLS,
@@ -97,7 +101,7 @@ export class PlayerEngine {
   }
 
   beatPeriod(): number {
-    return this.data ? 60 / this.data.tempo / this.speed : 0.5;
+    return beatPeriod(this.data?.tempo ?? 120, this.speed);
   }
 
   // --- Contenu ------------------------------------------------------------------------------
@@ -113,15 +117,15 @@ export class PlayerEngine {
     data.notes.forEach((n, i) => {
       const note = Tone.Frequency(n.pitch, "midi").toNote();
       const velocity = n.velocity / 127;
-      events.push({ time: ticks(n.start), type: "on", note, velocity, hand: n.hand });
-      events.push({ time: ticks(ends[i]), type: "off", note, velocity, hand: n.hand });
+      events.push({ time: tickTime(n.start), type: "on", note, velocity, hand: n.hand });
+      events.push({ time: tickTime(ends[i]), type: "off", note, velocity, hand: n.hand });
     });
     this.part = new Tone.Part<NoteEvent>((time, ev) => {
       if (ev.type === "off") this.sampler.triggerRelease(ev.note, time);
       else if (!this.muted[ev.hand]) this.sampler.triggerAttack(ev.note, time, ev.velocity);
     }, events).start(0);
 
-    const beats = data.beats.map((b, i) => ({ time: ticks(b), accent: i % 4 === 0 }));
+    const beats = data.beats.map((b, i) => ({ time: tickTime(b), accent: i % 4 === 0 }));
     this.metronomePart = new Tone.Part<{ time: string; accent: boolean }>((time, beat) => {
       if (this.metronome) this.tick(time, beat.accent);
     }, beats).start(0);
@@ -156,7 +160,7 @@ export class PlayerEngine {
   seek(seconds: number): void {
     const target = Math.max(0, Math.min(seconds, this.data?.duration ?? seconds));
     this.wait = null;
-    this.transport.ticks = Math.round(target * PPQ);
+    this.transport.ticks = secondsToTicks(target);
     this.sampler.releaseAll();
     if (this.playing) this.restartAccompaniment(Tone.now(), target);
   }
@@ -164,7 +168,7 @@ export class PlayerEngine {
   setSpeed(speed: number): void {
     const position = this.songTime();
     this.speed = speed;
-    this.transport.bpm.value = BASE_BPM * speed;
+    this.transport.bpm.value = transportBpm(speed);
     if (this.playing) this.restartAccompaniment(Tone.now(), position);
   }
 
@@ -174,8 +178,8 @@ export class PlayerEngine {
       return;
     }
     this.loopStart = loop.a;
-    this.transport.loopStart = ticks(loop.a);
-    this.transport.loopEnd = ticks(loop.b);
+    this.transport.loopStart = tickTime(loop.a);
+    this.transport.loopEnd = tickTime(loop.b);
     this.transport.loop = true;
   }
 
@@ -194,7 +198,7 @@ export class PlayerEngine {
     this.wait = null;
     if (!times) return;
     const events = times.map((t, index) => ({
-      time: `${Math.max(0, Math.round(t * PPQ) - 1)}i`,
+      time: waitPointTime(t),
       index,
     }));
     this.waitPart = new Tone.Part<{ time: string; index: number }>((time, ev) => {

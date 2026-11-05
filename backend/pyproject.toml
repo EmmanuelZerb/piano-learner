@@ -15,6 +15,8 @@ dependencies = [
 ]
 
 [tool.uv]
+# Cache des paquets dans le projet (sur D:), pas dans le profil Windows (disque C: saturé).
+cache-dir = ".uv-cache"
 default-groups = ["dev", "ml"]
 # basic-pitch 0.4 impose TensorFlow 2.14 en Python 3.11, non installable sous Windows.
 # On le retire et basic-pitch utilise automatiquement son modèle ONNX (onnxruntime).
@@ -67,5 +69,5 @@ markers = [
     "network: tests nécessitant Internet (exclus par défaut)",
     "ml: tests nécessitant les modèles ML",
 ]
-addopts = "-m 'not network and not ml'"
+addopts = "-m 'not network and not ml' --basetemp=.pytest-tmp"
 filterwarnings = ["ignore::DeprecationWarning:audioread.*"]

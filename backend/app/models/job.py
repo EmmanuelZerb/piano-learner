@@ -35,5 +35,6 @@ class Job(SQLModel, table=True):
     error_code: str | None = None
     error_message: str | None = None
     payload: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    timings: dict | None = Field(default=None, sa_column=Column(JSON))  # secondes par étape
     created_at: datetime = Field(default_factory=_now)
     finished_at: datetime | None = None

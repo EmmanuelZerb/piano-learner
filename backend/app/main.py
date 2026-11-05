@@ -17,7 +17,15 @@ from app.config import Settings, get_settings
 from app.db import make_engine
 from app.jobs import JobManager
 from app.pipeline.errors import PipelineError
-from app.system import DeviceInfo, ToolInfo, device_info, ffmpeg_info, ffprobe_info
+from app.system import (
+    DeviceInfo,
+    ToolInfo,
+    device_info,
+    ffmpeg_info,
+    ffprobe_info,
+    use_project_model_caches,
+)
+from app.telemetry import configure_logging
 
 
 class HealthResponse(BaseModel):
@@ -41,6 +49,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    configure_logging(settings.log_format, settings.log_level)
+    use_project_model_caches(settings.models_dir)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
 
     app = FastAPI(title="Piano Learner API", version="0.1.0", lifespan=lifespan)

@@ -9,9 +9,9 @@
 
 import asyncio
 import contextlib
-import logging
 import shutil
 import threading
+import time
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
@@ -30,8 +30,9 @@ from app.pipeline import postprocess as pp
 from app.pipeline import transcribe as tr
 from app.pipeline.errors import Cancelled, PipelineError
 from app.pipeline.ingest import ingest_saved_upload, ingest_youtube
+from app.telemetry import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger("jobs")
 
 # Part de chaque étape dans la barre de progression globale.
 STEP_RANGES: dict[str, tuple[float, float]] = {
@@ -70,6 +71,7 @@ class JobRead(BaseModel):
     error_message: str | None
     created_at: datetime
     finished_at: datetime | None
+    timings: dict[str, float] | None = None  # secondes passées dans chaque étape
 
     @classmethod
     def from_job(cls, job: Job) -> "JobRead":
@@ -81,12 +83,29 @@ class JobContext:
 
     def __init__(self, manager: "JobManager", job_id: str, cancel: threading.Event) -> None:
         self.manager, self.job_id, self._cancel = manager, job_id, cancel
+        self.timings: dict[str, float] = {}
+        self._current: tuple[str, float] | None = None
 
     def check(self) -> None:
         if self._cancel.is_set():
             raise Cancelled()
 
+    def _enter(self, name: str) -> None:
+        """Chronomètre : clôt l'étape précédente quand une nouvelle commence."""
+        if self._current and self._current[0] == name:
+            return
+        self.close()
+        self._current = (name, time.perf_counter())
+
+    def close(self) -> None:
+        if self._current:
+            name, start = self._current
+            elapsed = time.perf_counter() - start
+            self.timings[name] = round(self.timings.get(name, 0.0) + elapsed, 2)
+            self._current = None
+
     def step(self, name: str) -> Callable[[float], None]:
+        self._enter(name)
         low, high = STEP_RANGES[name]
         self.manager.update(self.job_id, step=name, progress=low)
 
@@ -184,7 +203,10 @@ class JobManager:
             query = query.where(col(Job.status).in_([JobStatus.QUEUED, JobStatus.RUNNING]))
         with Session(self.engine) as session:
             jobs = session.exec(query).all()
-        return [self.get(j.id) or JobRead.from_job(j) for j in jobs]
+        states = [self.get(j.id) or JobRead.from_job(j) for j in jobs]
+        # L'état en mémoire peut être en avance sur la base (fin de tâche en cours d'écriture) :
+        # c'est lui qui fait foi pour décider si une tâche est encore active.
+        return [s for s in states if not (active and s.status.finished)]
 
     def has_active(self, track_id: str) -> bool:
         return bool(self.list(track_id=track_id, active=True))
@@ -271,25 +293,44 @@ class JobManager:
         cancel = self._cancel.get(job_id, threading.Event())
         ctx = JobContext(self, job_id, cancel)
         self.update(job_id, status=JobStatus.RUNNING, step="starting")
+        log.info("job_started", extra={"job_id": job_id, "source": source})
+        start = time.perf_counter()
+        outcome: dict[str, object] = {"status": JobStatus.DONE, "step": "done", "progress": 1.0}
         try:
             ctx.check()
             run_process(self.settings, self.engine, ctx, source, payload, track_id)
-            self._finish(job_id, JobStatus.DONE, step="done", progress=1.0)
         except Cancelled:
-            self._finish(job_id, JobStatus.CANCELLED)
+            outcome = {"status": JobStatus.CANCELLED}
         except PipelineError as exc:
-            self._finish(job_id, JobStatus.ERROR, error_code=exc.code, error_message=exc.message)
+            outcome = {
+                "status": JobStatus.ERROR,
+                "error_code": exc.code,
+                "error_message": exc.message,
+            }
         except Exception as exc:
-            log.exception("Tâche %s en échec", job_id)
-            self._finish(
-                job_id,
-                JobStatus.ERROR,
-                error_code="internal",
-                error_message=f"Erreur inattendue : {exc}",
-            )
+            log.exception("job_crashed", extra={"job_id": job_id})
+            outcome = {
+                "status": JobStatus.ERROR,
+                "error_code": "internal",
+                "error_message": f"Erreur inattendue : {exc}",
+            }
         finally:
             if "upload_dir" in payload:
                 shutil.rmtree(payload["upload_dir"], ignore_errors=True)
+        ctx.close()
+        state = self.get(job_id)
+        log.info(
+            "job_finished",
+            extra={
+                "job_id": job_id,
+                "track_id": state.track_id if state else track_id,
+                "status": str(outcome["status"]),
+                "error_code": outcome.get("error_code"),
+                "total_s": round(time.perf_counter() - start, 2),
+                "timings": ctx.timings,
+            },
+        )
+        self._finish(job_id, timings=ctx.timings, **outcome)  # type: ignore[arg-type]
 
 
 def run_process(

@@ -13,8 +13,12 @@ class Settings(BaseSettings):
 
     storage_dir: Path = BACKEND_DIR / "storage"
     max_upload_mb: float = 200
+    log_format: str = "json"  # "json" (une ligne par événement) ou "text"
+    log_level: str = "INFO"
     max_duration_min: float = 20
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    # Modèles téléchargés (ByteDance, Demucs, Hugging Face). Par défaut : storage/models.
+    models_path: Path | None = None
 
     @property
     def database_url(self) -> str:
@@ -38,7 +42,7 @@ class Settings(BaseSettings):
 
     @property
     def models_dir(self) -> Path:
-        return self.storage_dir / "models"
+        return self.models_path or self.storage_dir / "models"
 
     @property
     def tmp_dir(self) -> Path:

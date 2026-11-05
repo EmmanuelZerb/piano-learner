@@ -122,6 +122,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", action="store_true", help="télécharge et teste les modèles")
     args = parser.parse_args()
+    from app.config import get_settings
+    from app.system import use_project_model_caches
+
+    use_project_model_caches(get_settings().models_dir)
 
     ok = run("imports", check_imports) and run("torch", check_torch)
     if ok and args.models:

@@ -33,3 +33,7 @@ next-env.d.ts
 Thumbs.db
 .vscode/
 .idea/
+
+# Caches locaux (redirigés depuis C:)
+.uv-cache/
+.pytest-tmp/

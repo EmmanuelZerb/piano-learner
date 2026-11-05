@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { cancelJob, type Job } from "@/lib/api";
-import { describeJob, isFinished, percent } from "@/lib/jobs";
+import { describeJob, describeTimings, isFinished, percent } from "@/lib/jobs";
 import { useJob } from "@/lib/useJob";
 
 type Props = {
@@ -69,6 +69,9 @@ export function JobProgress({ job: initial, onFinished, showTrackLink = false }:
         <span>{describeJob(job)}</span>
         {!finished && <span className="font-mono">{percent(job.progress)}</span>}
       </div>
+      {finished && describeTimings(job.timings) && (
+        <p className="text-xs text-zinc-400">{describeTimings(job.timings)}</p>
+      )}
     </div>
   );
 }

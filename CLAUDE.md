@@ -15,12 +15,13 @@ Application web locale et personnelle. Elle prend un audio (fichier ou URL YouTu
 | 6 — Lecteur « notes qui tombent » (Canvas, Tone.js, accompagnement) | ✅ |
 | 7 — Mode entraînement (MIDI, attente, libre, score, historique) | ✅ |
 | 8 — Bibliothèque, export MusicXML, éditeur de corrections | ✅ |
-| 9 — Qualité et finitions | ⏳ à faire |
+| 9 — Qualité et finitions (logs, mesures, e2e, README) | ✅ |
 
 ## Architecture
 
 ```
 backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
+  app/telemetry.py       Logs JSON structurés (configure_logging), `timed(step)` → step_done/step_failed
   app/main.py            create_app(settings) : moteur DB, JobManager (lifespan), CORS, handler PipelineError, /health
   app/jobs.py            JobManager : file asyncio + 1 worker (thread), progression en mémoire → SSE, annulation, reprise au démarrage ; run_process
   app/config.py          Settings (pydantic-settings, préfixe d'env PIANO_, backend/.env)
@@ -86,9 +87,10 @@ package.json (racine)    Orchestration uniquement (concurrently)
 
 ```
 npm install && npm run setup   # deps racine, venv backend (groupe ml inclus, torch CUDA), deps frontend
-npm run dev                    # API sur http://127.0.0.1:8000 + web sur http://localhost:3000
+npm run dev                    # API sur http://127.0.0.1:8000 + web sur http://localhost:3000 (rechargement)
+npm run build && npm start     # mode normal : sans rechargement, donc sans processus orphelins
 npm test                       # pytest (sans ml/network) + vitest
-npm run test:full              # tous les tests, y compris modèles réels et réseau (environ 1 min)
+npm run test:full              # tous les tests, y compris modèles réels, réseau et pipeline de bout en bout (environ 70 s)
 npm run lint                   # ruff check/format + eslint + prettier + tsc
 npm run format                 # ruff format + prettier --write
 npm run doctor                 # diagnostic ffmpeg / Node / torch / GPU
@@ -134,6 +136,17 @@ Les tests `network` et `ml` sont exclus par défaut. Pour les lancer : `uv run p
 - **Suppression** (`DELETE /tracks/{id}`) : dossier du morceau, caches stems/notes/temps (par hash) et tâches associées. Elle est refusée (409) si une tâche est active sur le morceau.
 - SQLite en WAL avec un timeout de 30 s : l'API lit pendant que le worker écrit.
 - Mesure : YouTube « Me at the zoo » (19 s) traité de bout en bout en 29 s (téléchargement, séparation, transcription, niveaux).
+- **Logs et mesures** :
+  - Une ligne JSON par événement sur stderr (`PIANO_LOG_FORMAT=text` pour la console).
+  - `workflow.py` chronomètre separate/transcribe/arrange (`timed`).
+  - Les tâches enregistrent `Job.timings` (secondes par étape, mesurées aux changements d'étape) et journalisent `job_started` / `job_finished` (statut, `total_s`, `timings`). L'interface les affiche à la fin de la tâche.
+- **État des tâches** : la mémoire peut être en avance sur la base, le temps d'écrire la fin d'une tâche. `JobManager.list(active=True)` filtre donc sur l'état fusionné ; sinon une suppression juste après la fin est refusée (test qui échouait de façon intermittente).
+- **Disque C: du poste presque plein** :
+  - Le cache uv est dans `backend/.uv-cache` (`[tool.uv] cache-dir`), et les dossiers temporaires de pytest dans `backend/.pytest-tmp` (`--basetemp`).
+  - torch.hub et Hugging Face écrivent dans `storage/models` (`use_project_model_caches`, via `TORCH_HOME` et `HF_HOME` sauf s'ils sont déjà définis).
+  - `PIANO_MODELS_PATH` permet de partager les modèles (utilisé par le test de bout en bout).
+- **Serveurs de dev orphelins** : sous Windows, chaque `npm run dev` interrompu brutalement laissait un uvicorn `--reload` et ses enfants (mémoire, verrou du cache uv). Pour nettoyer : `taskkill /T /F` sur les `uv.exe … uvicorn` et les `node.exe` du projet. En usage normal, préférer `npm start`.
+- **Tests** : le test de bout en bout `tests/test_e2e.py` (ml + network) fait passer un morceau Salamander de 8 s par tout le pipeline réel en environ 33 s. `frontend/lib/player/timing.ts` regroupe les conversions secondes ↔ ticks, testées.
 - **Pas de `make`** (Windows) : `npm run …` à la racine remplace `make dev`.
 - **torch / torchaudio < 2.9**, wheels **cu126** (index `pytorch-cu126` dans `pyproject.toml`) : demucs dépend des backends d'écriture torchaudio retirés en 2.9. Pour écrire les WAV, utiliser `soundfile`, pas `torchaudio.save`.
 - **Basic Pitch sans TensorFlow** : sous Windows / Python 3.11, basic-pitch 0.4 exige TF 2.14, qui n'est pas installable. On l'exclut via `[tool.uv] override-dependencies`, et basic-pitch utilise automatiquement `nmp.onnx` avec `onnxruntime` (sur CPU). Les warnings « Coremltools/TFLite/Tensorflow is not installed » sont normaux.

@@ -194,6 +194,7 @@ export type Job = {
   error_message: string | null;
   created_at: string;
   finished_at: string | null;
+  timings: Record<string, number> | null; // secondes passées dans chaque étape
 };
 
 export type ProcessOptions = {

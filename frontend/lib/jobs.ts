@@ -25,3 +25,12 @@ export function describeJob(job: Job): string {
 export function percent(progress: number): string {
   return `${Math.round(Math.min(1, Math.max(0, progress)) * 100)} %`;
 }
+
+/** { separate: 19.4, transcribe: 47.6 } → « Séparation des pistes 19 s · Transcription 48 s ». */
+export function describeTimings(timings: Record<string, number> | null): string | null {
+  if (!timings) return null;
+  const parts = Object.entries(timings)
+    .filter(([, seconds]) => seconds >= 0.5)
+    .map(([step, seconds]) => `${STEP_LABELS[step] ?? step} ${Math.round(seconds)} s`);
+  return parts.length ? parts.join(" · ") : null;
+}

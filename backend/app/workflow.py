@@ -15,6 +15,7 @@ from app.pipeline.errors import PipelineError
 from app.pipeline.ingest import WAV_NAME
 from app.pipeline.notes import StemTranscription
 from app.system import torch_device
+from app.telemetry import timed
 
 ProgressFn = Callable[[float], None]
 StepFn = Callable[[str, float], None]
@@ -35,12 +36,15 @@ def arrangement_dir(settings: Settings, track: Track) -> Path:
 def separate(
     settings: Settings, track: Track, on_progress: ProgressFn | None = None
 ) -> sep.SeparationResult:
-    return sep.separate(
-        wav_path(settings, track),
-        sep.stems_dir(settings.stems_cache_dir, track.wav_sha256),
-        torch_device(),
-        on_progress=on_progress,
-    )
+    with timed("separate", track_id=track.id, device=torch_device()) as info:
+        result = sep.separate(
+            wav_path(settings, track),
+            sep.stems_dir(settings.stems_cache_dir, track.wav_sha256),
+            torch_device(),
+            on_progress=on_progress,
+        )
+        info["cached"] = result.cached
+    return result
 
 
 def transcribe(
@@ -58,16 +62,18 @@ def transcribe(
         return (lambda fraction: on_step(step, fraction)) if on_step else None
 
     separation = separate(settings, track, progress("separate"))
-    result = tr.transcribe_stems(
-        separation.stems,
-        stems,
-        params,
-        settings.transcriptions_cache_dir / track.wav_sha256,
-        midi_dir(settings, track),
-        torch_device(),
-        settings.models_dir,
-        on_progress=progress("transcribe"),
-    )
+    with timed("transcribe", track_id=track.id, stems=stems) as info:
+        result = tr.transcribe_stems(
+            separation.stems,
+            stems,
+            params,
+            settings.transcriptions_cache_dir / track.wav_sha256,
+            midi_dir(settings, track),
+            torch_device(),
+            settings.models_dir,
+            on_progress=progress("transcribe"),
+        )
+        info["cached_stems"] = result.cached
     if on_step:
         on_step("arrange", 0.0)
     if postprocess is None:
@@ -96,6 +102,9 @@ def arrange(
 ) -> dict[str, object]:
     """Post-traitement seul : relit les transcriptions, sans relancer de modèle."""
     params = params or pp.PostprocessParams()
-    grid = pp.load_beats(wav_path(settings, track), settings.analysis_cache_dir / track.wav_sha256)
-    arrangements = pp.arrange(load_transcriptions(settings, track), grid, params)
-    return pp.write_arrangements(arrangements, params, arrangement_dir(settings, track))
+    with timed("arrange", track_id=track.id):
+        grid = pp.load_beats(
+            wav_path(settings, track), settings.analysis_cache_dir / track.wav_sha256
+        )
+        arrangements = pp.arrange(load_transcriptions(settings, track), grid, params)
+        return pp.write_arrangements(arrangements, params, arrangement_dir(settings, track))

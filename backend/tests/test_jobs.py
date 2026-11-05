@@ -86,6 +86,8 @@ def test_upload_job_runs_full_pipeline(
     done = wait_for(client, job["id"])
     assert done["status"] == "done", done
     assert done["progress"] == 1.0 and done["label"] == "morceau"
+    assert {"convert", "separate", "transcribe", "arrange"} <= set(done["timings"])
+    assert all(seconds >= 0 for seconds in done["timings"].values())
     track_id = done["track_id"]
     assert client.get(f"/tracks/{track_id}/arrangement").json()["available"] is True
     assert client.get(f"/tracks/{track_id}/stems").json()["available"] is True

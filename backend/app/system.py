@@ -1,9 +1,11 @@
 """Détection de l'environnement : ffmpeg et accélérateur (CUDA / MPS / CPU)."""
 
 import importlib.util
+import os
 import shutil
 import subprocess
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -73,3 +75,11 @@ def device_info() -> DeviceInfo:
 
 def torch_device() -> str:
     return device_info().device
+
+
+def use_project_model_caches(models_dir: Path) -> None:
+    """Range les téléchargements de torch.hub (Demucs) et de Hugging Face dans le dossier des
+    modèles du projet plutôt que dans le profil utilisateur (souvent sur un petit disque C:).
+    Sans effet si l'utilisateur a déjà défini ces variables."""
+    os.environ.setdefault("TORCH_HOME", str(models_dir / "torch"))
+    os.environ.setdefault("HF_HOME", str(models_dir / "huggingface"))
