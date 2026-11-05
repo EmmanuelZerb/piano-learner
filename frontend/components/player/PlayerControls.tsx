@@ -1,6 +1,6 @@
 "use client";
 
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 
 import type { Level } from "@/lib/api";
 import { LEVEL_LABELS } from "@/lib/music";
@@ -11,6 +11,7 @@ import { STEM_LABELS } from "@/lib/stems";
 
 export type PlayerActions = {
   togglePlay: () => void;
+  pause: () => void;
   seek: (seconds: number) => void;
   seekBy: (delta: number) => void;
   setLoopPoint: (point: "a" | "b") => void;
@@ -25,6 +26,7 @@ type Props = {
   timeRef: RefObject<HTMLSpanElement | null>;
   accompanimentChoices: string[];
   disabled: boolean;
+  practice: ReactNode;
 };
 
 const ACCOMPANIMENT_LABELS: Record<string, string> = {
@@ -59,6 +61,7 @@ export function PlayerControls({
   progressRef,
   timeRef,
   accompanimentChoices,
+  practice,
 }: Props) {
   const s = usePlayerStore();
   const playing = s.status === "playing";
@@ -200,6 +203,13 @@ export function PlayerControls({
           />
         </label>
       </div>
+
+      <details className="text-xs text-zinc-400" open={s.practiceMode !== "off" || undefined}>
+        <summary className="cursor-pointer">
+          Entraînement (clavier MIDI, score, progression)
+        </summary>
+        <div className="mt-2">{practice}</div>
+      </details>
 
       <details className="text-xs text-zinc-400">
         <summary className="cursor-pointer">Accompagnement, volumes et raccourcis</summary>

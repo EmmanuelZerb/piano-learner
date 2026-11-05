@@ -39,6 +39,12 @@ export class PlayerEngine {
   private speed = 1;
   private loopStart = 0;
   private countInEnd: number | null = null;
+  private waitPart: Tone.Part<{ time: string; index: number }> | null = null;
+  private wait: { index: number; at: number } | null = null;
+  private resumedFrom: number | null = null;
+  // Intervalle (temps audio) pendant lequel le Transport avance réellement.
+  private runFrom: number | null = null;
+  private runUntil: number | null = null;
   private accBuffers = new Map<string, Tone.ToneAudioBuffer>();
   private accEnabled: string[] = [];
   private accNodes: AccompanimentNode[] = [];
@@ -72,7 +78,14 @@ export class PlayerEngine {
 
   /** Position (s) dans le morceau à l'instant entendu. */
   songTime(): number {
-    return this.transport.getTicksAtTime(this.audioTime()) / PPQ;
+    const heard = this.audioTime();
+    const running =
+      this.runFrom !== null &&
+      heard >= this.runFrom &&
+      (this.runUntil === null || heard < this.runUntil);
+    // À l'arrêt, on lit la position courante du Transport (à « maintenant ») : un saut fait
+    // en pause est ainsi visible tout de suite, sans attendre l'anticipation de Tone.
+    return (running ? this.transport.getTicksAtTime(heard) : this.transport.ticks) / PPQ;
   }
 
   /** Secondes restantes avant la fin du décompte (null hors décompte). */
@@ -126,18 +139,23 @@ export class PlayerEngine {
       this.countInEnd = startAt;
     }
     this.transport.start(startAt);
+    this.runFrom = startAt;
+    this.runUntil = null;
     this.restartAccompaniment(startAt, this.transport.ticks / PPQ);
   }
 
   pause(): void {
     this.transport.pause();
+    this.runFrom = null;
     this.countInEnd = null;
+    this.wait = null;
     this.sampler.releaseAll();
     this.stopAccompaniment();
   }
 
   seek(seconds: number): void {
     const target = Math.max(0, Math.min(seconds, this.data?.duration ?? seconds));
+    this.wait = null;
     this.transport.ticks = Math.round(target * PPQ);
     this.sampler.releaseAll();
     if (this.playing) this.restartAccompaniment(Tone.now(), target);
@@ -165,6 +183,66 @@ export class PlayerEngine {
     this.sampler.releaseAll(time);
     this.restartAccompaniment(time, this.loopStart);
   };
+
+  // --- Mode attente (entraînement) ------------------------------------------------------------
+
+  /** Un point d'arrêt juste avant chaque étape. `shouldWait(i)` est appelé un peu en avance
+   * (anticipation du Transport) : il renvoie false si l'accord est déjà tenu. */
+  setWaitSteps(times: number[] | null, shouldWait: (index: number) => boolean): void {
+    this.waitPart?.dispose();
+    this.waitPart = null;
+    this.wait = null;
+    if (!times) return;
+    const events = times.map((t, index) => ({
+      time: `${Math.max(0, Math.round(t * PPQ) - 1)}i`,
+      index,
+    }));
+    this.waitPart = new Tone.Part<{ time: string; index: number }>((time, ev) => {
+      if (ev.index === this.resumedFrom) {
+        this.resumedFrom = null; // le point où l'on vient de repartir ne bloque pas à nouveau
+        return;
+      }
+      if (!shouldWait(ev.index)) return;
+      this.transport.pause(time);
+      this.runUntil = time;
+      this.stopAccompaniment(time);
+      this.wait = { index: ev.index, at: time };
+    }, events).start(0);
+  }
+
+  /** Étape attendue (arrêt atteint ou imminent), null hors attente. */
+  waitingIndex(): number | null {
+    return this.wait?.index ?? null;
+  }
+
+  /** Reprend après une attente. Jamais avant l'instant d'arrêt déjà programmé, sinon la
+   * reprise passerait avant la pause et la lecture resterait bloquée. */
+  resume(): void {
+    if (!this.wait) return;
+    const at = Math.max(Tone.now() + 0.02, this.wait.at + 0.005);
+    const position = this.transport.getTicksAtTime(this.wait.at) / PPQ;
+    this.resumedFrom = this.wait.index;
+    this.wait = null;
+    this.transport.start(at);
+    this.runFrom = at;
+    this.runUntil = null;
+    this.restartAccompaniment(at, position);
+  }
+
+  get waiting(): boolean {
+    return this.wait !== null;
+  }
+
+  // --- Notes jouées par l'utilisateur ---------------------------------------------------------
+
+  async previewNote(pitch: number, velocity: number): Promise<void> {
+    await Tone.start();
+    this.sampler.triggerAttack(Tone.Frequency(pitch, "midi").toNote(), Tone.now(), velocity / 127);
+  }
+
+  releasePreview(pitch: number): void {
+    this.sampler.triggerRelease(Tone.Frequency(pitch, "midi").toNote(), Tone.now());
+  }
 
   // --- Réglages -------------------------------------------------------------------------------
 
@@ -239,6 +317,7 @@ export class PlayerEngine {
     this.stopAccompaniment();
     this.part?.dispose();
     this.metronomePart?.dispose();
+    this.waitPart?.dispose();
     for (const node of [this.sampler, this.click, this.pianoGain, this.accGain]) node.dispose();
     this.accBuffers.forEach((b) => b.dispose());
   }

@@ -9,7 +9,7 @@ from uuid import uuid4
 from sqlmodel import Session, select
 
 from app.config import Settings
-from app.models import Job, Track, TrackSource
+from app.models import Job, PracticeSession, Track, TrackSource
 from app.pipeline.ingest import WAV_NAME, IngestedAudio, sha256_file
 
 
@@ -29,7 +29,8 @@ def track_dir(settings: Settings, track_id: str) -> Path:
 
 
 def delete_track(session: Session, settings: Settings, track: Track) -> None:
-    """Supprime le morceau, ses fichiers, ses caches (stems, notes, temps) et ses tâches."""
+    """Supprime le morceau, ses fichiers, ses caches (stems, notes, temps), ses tâches et
+    son historique d'entraînement."""
     shutil.rmtree(track_dir(settings, track.id), ignore_errors=True)
     for cache in (
         settings.stems_cache_dir,
@@ -39,6 +40,10 @@ def delete_track(session: Session, settings: Settings, track: Track) -> None:
         shutil.rmtree(cache / track.wav_sha256, ignore_errors=True)
     for job in session.exec(select(Job).where(Job.track_id == track.id)).all():
         session.delete(job)
+    for practice in session.exec(
+        select(PracticeSession).where(PracticeSession.track_id == track.id)
+    ).all():
+        session.delete(practice)
     session.delete(track)
     session.commit()
 

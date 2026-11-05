@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import type { Level } from "@/lib/api";
 import type { Hand } from "@/lib/player/notes";
+import type { PracticeHands, PracticeMode, PracticeScore } from "@/lib/player/practice";
 
 export type PlayerStatus = "loading" | "ready" | "playing" | "error";
 
@@ -23,7 +24,20 @@ export type PlayerState = {
   accompaniment: string[];
   pianoVolume: number;
   accompanimentVolume: number;
+  // Entraînement
+  practiceMode: PracticeMode;
+  practiceHands: PracticeHands;
+  midiInputId: string | null;
+  inputSound: boolean; // jouer le son des notes de l'utilisateur (clavier sans haut-parleur, souris)
+  score: PracticeScore;
+  summary: PracticeSummary | null;
   set: (patch: Partial<Omit<PlayerState, "set">>) => void;
+};
+
+export type PracticeSummary = PracticeScore & {
+  accuracy: number;
+  durationS: number;
+  saved: boolean;
 };
 
 export const usePlayerStore = create<PlayerState>((set) => ({
@@ -42,6 +56,12 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   accompaniment: [],
   pianoVolume: 0.9,
   accompanimentVolume: 0.6,
+  practiceMode: "off",
+  practiceHands: "R",
+  midiInputId: null,
+  inputSound: true,
+  score: { hits: 0, wrongs: 0, misses: 0 },
+  summary: null,
   set: (patch) => set(patch),
 }));
 

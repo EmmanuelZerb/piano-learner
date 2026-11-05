@@ -5,6 +5,9 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PlayerControls, type PlayerActions } from "@/components/player/PlayerControls";
+import { PracticePanel, PracticeSummaryDialog } from "@/components/player/PracticePanel";
+import { useMidi } from "@/components/player/useMidi";
+import { usePractice } from "@/components/player/usePractice";
 import {
   getArrangement,
   getStems,
@@ -15,14 +18,14 @@ import {
   type Track,
 } from "@/lib/api";
 import type { PlayerEngine } from "@/lib/player/engine";
-import { keyboardLayout } from "@/lib/player/keyboard";
+import { keyAt, keyboardLayout } from "@/lib/player/keyboard";
 import {
   clampSpeed,
   normalizeLoop,
   parseArrangement,
   type ArrangementData,
 } from "@/lib/player/notes";
-import { drawFrame } from "@/lib/player/renderer";
+import { drawFrame, keyboardHeight } from "@/lib/player/renderer";
 import { isTypingTarget, shortcutFor, type ShortcutAction } from "@/lib/player/shortcuts";
 import { usePlayerStore, ZOOM_MAX, ZOOM_MIN } from "@/lib/player/store";
 
@@ -43,6 +46,7 @@ type PlayerStats = {
 declare global {
   interface Window {
     __playerStats?: PlayerStats;
+    __pianoEngine?: PlayerEngine;
   }
 }
 
@@ -59,10 +63,19 @@ export function PlayerView() {
   const [sources, setSources] = useState<Record<string, string>>({});
   const [duration, setDuration] = useState(0);
   const [samplesReady, setSamplesReady] = useState(false);
+  const [dataVersion, setDataVersion] = useState(0);
   // Repère pour mesurer la dérive : (temps audio, position) au dernier changement.
   const anchorRef = useRef<{ audio: number; song: number; speed: number } | null>(null);
 
   const { set } = store;
+
+  // Entraînement : arbitre, mode attente, clavier MIDI et clavier à l'écran.
+  const practice = usePractice(id, engineRef, dataRef, dataVersion);
+  const midi = useMidi(practice.noteOn, practice.noteOff);
+  const practiceRef = useRef(practice);
+  useEffect(() => {
+    practiceRef.current = practice;
+  }, [practice]);
 
   // --- Moteur audio (chargé côté client uniquement : Web Audio) ----------------------------
   useEffect(() => {
@@ -72,6 +85,7 @@ export function PlayerView() {
       if (disposed) return;
       engine = new PlayerEngine("/samples/salamander/");
       engineRef.current = engine;
+      if (process.env.NODE_ENV !== "production") window.__pianoEngine = engine; // diagnostic
       engine.ready
         .then(() => !disposed && setSamplesReady(true))
         .catch(() =>
@@ -128,6 +142,8 @@ export function PlayerView() {
         engine.setArrangement(data);
         engine.seek(Math.min(position, data.duration));
         setDuration(data.duration);
+        setDataVersion((v) => v + 1);
+        setDataVersion((v) => v + 1);
         set({ status: engine.playing ? "playing" : "ready" });
       })
       .catch((err: unknown) => {
@@ -143,10 +159,6 @@ export function PlayerView() {
     [store.loopA, store.loopB, duration],
   );
   useEffect(() => engineRef.current?.setLoop(loop), [loop, samplesReady]);
-  useEffect(() => {
-    engineRef.current?.setMuted("L", store.muted.L);
-    engineRef.current?.setMuted("R", store.muted.R);
-  }, [store.muted, samplesReady]);
   useEffect(
     () => engineRef.current?.setMetronome(store.metronome),
     [store.metronome, samplesReady],
@@ -177,10 +189,11 @@ export function PlayerView() {
       set({ status: "ready" });
     };
     return {
+      pause,
       togglePlay: () => {
         const e = engine();
         if (!e || !dataRef.current) return;
-        if (e.playing) return pause();
+        if (e.playing || e.waiting) return pause();
         const { countIn } = usePlayerStore.getState();
         if (e.songTime() >= dataRef.current.duration - 0.05) e.seek(loop?.a ?? 0);
         void e.play(countIn ? COUNT_IN_BEATS : 0).then(() => set({ status: "playing" }));
@@ -317,14 +330,18 @@ export function PlayerView() {
 
       const s = usePlayerStore.getState();
       const time = engine.songTime();
-      if (engine.playing && !engine.countInRemaining()) {
+      if (engine.waiting)
+        anchorRef.current = null; // l'attente interrompt la mesure de dérive
+      else if (engine.playing && !engine.countInRemaining()) {
         trackDrift(engine, time);
         const end = s.loopA !== null && s.loopB !== null ? Infinity : data.duration;
         if (time >= end) {
           engine.pause();
           s.set({ status: "ready" });
+          void practiceRef.current.finishSession();
         }
       }
+      const practiceFrame = practiceRef.current.frame(time, now);
       const countLeft = engine.countInRemaining();
       drawFrame({
         ctx,
@@ -339,6 +356,7 @@ export function PlayerView() {
         stats: s.showStats ? stats : null,
         loop: normalizeLoop(s.loopA, s.loopB, data.duration),
         countIn: countLeft === null ? null : Math.ceil(countLeft / engine.beatPeriod()),
+        practice: practiceFrame,
       });
       if (progressRef.current) progressRef.current.style.width = `${(time / data.duration) * 100}%`;
       if (timeRef.current) timeRef.current.textContent = `${clock(time)} / ${clock(data.duration)}`;
@@ -358,10 +376,51 @@ export function PlayerView() {
       stats.maxAbsDriftMs = Math.max(stats.maxAbsDriftMs, Math.abs(stats.driftMs));
     };
 
+    // Clavier à l'écran : cliquer (ou glisser) sur les touches joue des notes, comme un
+    // clavier MIDI. Utile sans clavier branché, et pour tester le mode entraînement.
+    let pointerPitch: number | null = null;
+    const pitchAt = (event: PointerEvent): number | null => {
+      const rect = canvas.getBoundingClientRect();
+      const kb = keyboardHeight(size.width);
+      const y = event.clientY - rect.top - (size.height - kb);
+      return y >= 0 ? (keyAt(layout, event.clientX - rect.left, y, kb)?.pitch ?? null) : null;
+    };
+    const release = () => {
+      if (pointerPitch !== null) practiceRef.current.noteOff(pointerPitch);
+      pointerPitch = null;
+    };
+    const onDown = (event: PointerEvent) => {
+      const pitch = pitchAt(event);
+      if (pitch === null) return;
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // pointeur synthétique (tests) : pas de capture possible
+      }
+      pointerPitch = pitch;
+      practiceRef.current.noteOn(pitch, 90);
+    };
+    const onMove = (event: PointerEvent) => {
+      if (pointerPitch === null) return;
+      const pitch = pitchAt(event);
+      if (pitch === null || pitch === pointerPitch) return;
+      release();
+      pointerPitch = pitch;
+      practiceRef.current.noteOn(pitch, 90);
+    };
+    canvas.addEventListener("pointerdown", onDown);
+    canvas.addEventListener("pointermove", onMove);
+    canvas.addEventListener("pointerup", release);
+    canvas.addEventListener("pointercancel", release);
+
     frame = requestAnimationFrame(loopFn);
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", release);
+      canvas.removeEventListener("pointercancel", release);
     };
   }, []);
 
@@ -378,7 +437,10 @@ export function PlayerView() {
           <span className="text-zinc-500">Chargement du piano…</span>
         )}
       </header>
-      <canvas ref={canvasRef} className="min-h-0 w-full flex-1" />
+      <div className="relative min-h-0 flex-1">
+        <canvas ref={canvasRef} className="h-full w-full touch-none" />
+        <PracticeSummaryDialog />
+      </div>
       <PlayerControls
         actions={actions}
         duration={duration}
@@ -387,6 +449,16 @@ export function PlayerView() {
         timeRef={timeRef}
         accompanimentChoices={Object.keys(sources)}
         disabled={!samplesReady || duration === 0}
+        practice={
+          <PracticePanel
+            trackId={id}
+            midi={midi}
+            onFinish={() => {
+              actions.pause();
+              void practice.finishSession();
+            }}
+          />
+        }
       />
     </div>
   );

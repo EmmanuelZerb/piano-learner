@@ -1,6 +1,12 @@
 /** Dessin Canvas 2D d'une image : notes qui tombent + clavier. Aucune allocation lourde. */
-import { keyFor, type Key } from "@/lib/player/keyboard";
-import { activeNotes, notesInWindow, type ArrangementData, type Hand } from "@/lib/player/notes";
+import { BLACK_KEY_HEIGHT_RATIO, keyFor, type Key } from "@/lib/player/keyboard";
+import {
+  activeNotes,
+  notesInWindow,
+  type ArrangementData,
+  type Hand,
+  type PlayerNote,
+} from "@/lib/player/notes";
 import { pitchName } from "@/lib/music";
 
 export const HAND_COLORS: Record<Hand, { fill: string; dark: string; key: string }> = {
@@ -11,6 +17,15 @@ const BACKGROUND = "#0b0b0f";
 const BEAT_LINE = "rgba(255,255,255,0.05)";
 const BAR_LINE = "rgba(255,255,255,0.12)";
 const LOOP_SHADE = "rgba(250,204,21,0.08)";
+const USER_KEY_COLORS = { hit: "#facc15", wrong: "#ef4444", held: "#c084fc" } as const;
+const WAIT_KEY = "rgba(250,204,21,0.55)";
+
+/** Retours du mode entraînement pour une image. */
+export type PracticeOverlay = {
+  judgement: (note: PlayerNote) => 0 | 1 | 2; // 1 = jouée juste, 2 = manquée
+  keys: Map<number, keyof typeof USER_KEY_COLORS>; // touches tenues par l'utilisateur
+  waitPitches: number[] | null;
+};
 
 export type FrameInput = {
   ctx: CanvasRenderingContext2D;
@@ -24,6 +39,7 @@ export type FrameInput = {
   showNames: boolean;
   loop: { a: number; b: number } | null;
   countIn: number | null; // temps restants du décompte
+  practice: PracticeOverlay | null;
   stats: {
     fps: number;
     minFps: number;
@@ -45,6 +61,7 @@ export function drawFrame(input: FrameInput): void {
   drawGrid(input, fallHeight);
   drawNotes(input, fallHeight);
   drawKeyboard(input, fallHeight);
+  if (input.practice?.waitPitches) drawWaitHint(ctx, width);
   if (input.countIn !== null) drawCountIn(ctx, width, fallHeight, input.countIn);
   if (input.stats) drawStats(ctx, width, input.stats);
 }
@@ -84,11 +101,17 @@ function drawNotes(input: FrameInput, fallHeight: number): void {
     const bottom = Math.min(fallHeight, yAt(note.start, input, fallHeight));
     const height = Math.max(2, bottom - top);
     const colors = HAND_COLORS[note.hand];
-    ctx.globalAlpha = muted[note.hand] ? 0.25 : 1;
-    ctx.fillStyle = key.black ? colors.dark : colors.fill;
+    const judged = input.practice?.judgement(note) ?? 0;
+    ctx.globalAlpha = muted[note.hand] ? 0.25 : judged === 2 ? 0.45 : 1;
+    ctx.fillStyle = judged === 2 ? "#b91c1c" : key.black ? colors.dark : colors.fill;
     ctx.beginPath();
     ctx.roundRect(key.x + 1, top, key.width - 2, height, 3);
     ctx.fill();
+    if (judged === 1) {
+      ctx.strokeStyle = "#fef08a";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
     if (showNames && height > 14 && key.width > 9) {
       ctx.fillStyle = "rgba(0,0,0,0.75)";
       ctx.fillText(pitchName(note.pitch).replace(/\d+$/, ""), key.x + key.width / 2, bottom - 4);
@@ -102,21 +125,38 @@ function drawKeyboard(input: FrameInput, top: number): void {
   const pressed = new Map<number, Hand>();
   for (const note of activeNotes(data, time)) pressed.set(note.pitch, note.hand);
 
+  const user = input.practice?.keys;
+  const waiting = new Set(input.practice?.waitPitches ?? []);
+  // Priorité : touche jouée par l'utilisateur, puis note jouée par le lecteur.
+  const colorOf = (key: Key, fallback: string): string => {
+    const mark = user?.get(key.pitch);
+    if (mark) return USER_KEY_COLORS[mark];
+    const hand = pressed.get(key.pitch);
+    if (hand) return key.black ? HAND_COLORS[hand].dark : HAND_COLORS[hand].key;
+    return fallback;
+  };
+
   const bottom = height - top;
   ctx.fillStyle = "#1f1f25";
   ctx.fillRect(0, top - 3, input.width, 3); // liseré au-dessus des touches
   for (const key of layout) {
     if (key.black) continue;
-    const hand = pressed.get(key.pitch);
-    ctx.fillStyle = hand ? HAND_COLORS[hand].key : "#f4f4f5";
+    ctx.fillStyle = colorOf(key, "#f4f4f5");
     ctx.fillRect(key.x + 0.5, top, key.width - 1, bottom - 2);
+    if (waiting.has(key.pitch) && !user?.has(key.pitch)) {
+      ctx.fillStyle = WAIT_KEY;
+      ctx.fillRect(key.x + 0.5, top + bottom * 0.62, key.width - 1, bottom * 0.38 - 2);
+    }
   }
-  const blackHeight = bottom * 0.62;
+  const blackHeight = bottom * BLACK_KEY_HEIGHT_RATIO;
   for (const key of layout) {
     if (!key.black) continue;
-    const hand = pressed.get(key.pitch);
-    ctx.fillStyle = hand ? HAND_COLORS[hand].dark : "#18181b";
+    ctx.fillStyle = colorOf(key, "#18181b");
     ctx.fillRect(key.x, top, key.width, blackHeight);
+    if (waiting.has(key.pitch) && !user?.has(key.pitch)) {
+      ctx.fillStyle = WAIT_KEY;
+      ctx.fillRect(key.x, top + blackHeight * 0.5, key.width, blackHeight * 0.5);
+    }
   }
   // Repère du do central.
   const c4 = keyFor(layout, 60);
@@ -158,4 +198,11 @@ function drawStats(
   ctx.font = "12px ui-monospace, monospace";
   ctx.textAlign = "left";
   lines.forEach((line, i) => ctx.fillText(line, width - 222, 26 + i * 18));
+}
+
+function drawWaitHint(ctx: CanvasRenderingContext2D, width: number): void {
+  ctx.fillStyle = "rgba(250,204,21,0.9)";
+  ctx.font = "600 14px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("À toi : joue les touches surlignées en jaune", width / 2, 24);
 }

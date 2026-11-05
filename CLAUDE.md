@@ -13,8 +13,9 @@ Application web locale et personnelle. Elle prend un audio (fichier ou URL YouTu
 | 4 — Post-traitement (tempo, quantification, mains, niveaux, tonalité, accords) | ✅ |
 | 5 — API et tâches asynchrones (SSE, annulation, suppression) | ✅ |
 | 6 — Lecteur « notes qui tombent » (Canvas, Tone.js, accompagnement) | ✅ |
-| 7 — Mode entraînement (clavier MIDI) | ⏳ à faire |
-| 8–9 | voir le cahier des charges ( lecteur, entraînement, bibliothèque, finitions) |
+| 7 — Mode entraînement (MIDI, attente, libre, score, historique) | ✅ |
+| 8 — Bibliothèque et export (MusicXML, éditeur) | ⏳ à faire |
+| 9 | Qualité et finitions |
 
 ## Architecture
 
@@ -25,7 +26,7 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/config.py          Settings (pydantic-settings, préfixe d'env PIANO_, backend/.env)
   app/system.py          Détection ffmpeg/ffprobe et du device torch (cuda/mps/cpu)
   app/db.py              Moteur SQLite, migration minimale (add_missing_columns), get_session
-  app/models/            Tables SQLModel (Track avec transcribe_stems, Job)
+  app/models/            Tables SQLModel (Track avec transcribe_stems, Job, PracticeSession)
   app/workflow.py        Enchaînement par morceau : separate → transcribe (→ arrange auto) ; arrange seul
   app/library.py         Dossiers de travail temporaires, enregistrement et déduplication (hash du WAV)
   app/api/deps.py        Dépendances communes (session, settings, get_track_or_404)
@@ -33,6 +34,7 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/api/stems.py       Routes /tracks/{id}/separate, /stems, /stems/{name}
   app/api/transcription.py  /tracks/{id}/transcribe (sépare si besoin + régénère les niveaux), /transcription, /midi/{f}.mid, /transcription/defaults
   app/api/arrangement.py /tracks/{id}/arrange (post-traitement seul), /arrangement, /arrangement/{niveau}.mid|.json, /arrangement/defaults
+  app/api/practice.py    POST/GET /tracks/{id}/practice : séances d'entraînement, meilleur score, temps total
   app/api/jobs.py        /jobs/youtube, /jobs/upload, /tracks/{id}/jobs, /jobs, /jobs/{id}, /jobs/{id}/events (SSE), /jobs/{id}/cancel
   app/api/files.py       serve_track_file : fichiers générés, protégé contre la sortie du dossier
   app/pipeline/ingest.py Validation (octets d'en-tête + ffprobe), yt-dlp, normalisation ffmpeg
@@ -65,8 +67,10 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
 frontend/                Next.js 16 (App Router), React 19, TS strict, Tailwind 4, vitest
   app/                   Pages (/, /tracks/[id], /tracks/[id]/play)
   components/            Panneaux de la page morceau, JobProgress, Slider
-  components/player/     PlayerView (chargement, boucle rAF, raccourcis), PlayerControls
-  lib/player/            engine.ts (Tone), renderer.ts (Canvas), notes.ts, keyboard.ts,
+  components/player/     PlayerView (chargement, boucle rAF, raccourcis, clavier à la souris), PlayerControls,
+                         usePractice (arbitre, attente, séance), useMidi, PracticePanel (+ bilan)
+  lib/player/            engine.ts (Tone), renderer.ts (Canvas), notes.ts, keyboard.ts, practice.ts
+                         (PracticeJudge, waitSteps), midi.ts (Web MIDI),
                          shortcuts.ts, store.ts (Zustand), samples.mjs (liste Salamander)
   scripts/fetch-samples.mjs  Télécharge Salamander dans public/samples/ (ignoré par git)
   lib/                   Client API, audio, MIDI, stores
@@ -157,6 +161,22 @@ Les tests `network` et `ml` sont exclus par défaut. Pour les lancer : `uv run p
   - `notesInWindow` fait une recherche dichotomique, avec une marge égale à la durée de la plus longue note.
   - Couleurs : main droite en vert, main gauche en bleu, plus foncé sur les touches noires.
 - `@tonejs/midi` n'est pas utilisé : le lecteur lit le JSON des niveaux, qui contient en plus les mains, les temps et les accords.
+- **Entraînement** :
+  - Entrées : clavier MIDI (Web MIDI, accès demandé au clic, branchement à chaud) ou clic/glissé sur le clavier à l'écran. Les deux passent par `usePractice.noteOn/noteOff`.
+  - Main travaillée : elle n'est pas jouée par le lecteur ; l'autre main l'est.
+- **Mode attente** :
+  - Un `Tone.Part` place un point d'arrêt 1 tick avant chaque attaque (accord = notes à moins de 60 ms).
+  - Le callback, appelé avec l'anticipation de Tone, fait `transport.pause(time)` sauf si l'accord est déjà tenu.
+  - `resume()` repart au plus tôt juste après l'instant d'arrêt (sinon la pause programmée bloquerait la reprise). `resumedFrom` ignore l'arrêt d'où l'on repart.
+- **Arbitrage** (`PracticeJudge`) :
+  - Juste = même hauteur à ±150 ms en temps réel (× vitesse en temps du morceau), la note attendue la plus proche.
+  - Fausse = toute autre touche. Manquée = note dépassée sans avoir été jouée (mode libre seulement).
+  - Un retour en arrière (boucle, saut) rend le passage rejouable sans effacer le score.
+  - Précision = justes / (justes + fausses + manquées).
+- **Séance** : chronométrée pendant la lecture et l'attente. « Terminer la séance » (ou la fin du morceau) affiche le bilan, puis l'enregistre via POST /practice si au moins une note a été jugée.
+- **Position à l'arrêt** : `songTime()` lit `transport.ticks` (à « maintenant ») quand le Transport n'avance pas. Avant ce correctif, un saut fait en pause n'était visible qu'après l'anticipation de Tone (≈ 100 ms), et A/B enregistraient une position périmée.
+- **Diagnostic** : `window.__pianoEngine` (développement uniquement) et `window.__playerStats`.
+- **Vérifié sans clavier MIDI**, par des clics simulés sur le clavier à l'écran : attente en boucle 0–5 s (29 étapes, arrêt à chacune, reprise et nouvelle attente après chaque tour), fausse note sans déblocage, mode libre (justes/fausses/manquées), séance enregistrée.
 - **Mesures du lecteur** (morceau test, niveau avancé, 60 %, voix et batterie en accompagnement) :
   - Page visible : 72 images/s (la fréquence de l'écran), pire image de 15 ms. Dérive entre l'image et l'horloge audio : 3,2 ms au maximum.
   - Onglet masqué : le navigateur bride `requestAnimationFrame` (jusqu'à 1 image/s) et l'audio. Les mesures ne valent donc que page visible.

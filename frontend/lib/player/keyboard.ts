@@ -33,3 +33,21 @@ export function keyboardLayout(width: number): Key[] {
 export function keyFor(layout: Key[], pitch: number): Key | undefined {
   return layout[pitch - LOWEST];
 }
+
+/** Hauteur des touches noires, en fraction de la hauteur du clavier. */
+export const BLACK_KEY_HEIGHT_RATIO = 0.62;
+
+/** Touche sous un point du clavier (y relatif au haut du clavier) : les noires passent devant. */
+export function keyAt(
+  layout: Key[],
+  x: number,
+  y: number,
+  keyboardHeight: number,
+): Key | undefined {
+  const inside = (k: Key) => x >= k.x && x < k.x + k.width;
+  if (y < keyboardHeight * BLACK_KEY_HEIGHT_RATIO) {
+    const black = layout.find((k) => k.black && inside(k));
+    if (black) return black;
+  }
+  return layout.find((k) => !k.black && inside(k));
+}

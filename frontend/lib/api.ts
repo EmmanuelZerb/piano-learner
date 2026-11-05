@@ -255,6 +255,47 @@ export async function deleteTrack(id: string): Promise<void> {
   }
 }
 
+export type PracticeRecord = {
+  level: Level;
+  mode: "wait" | "free";
+  hands: "R" | "L" | "LR";
+  speed: number;
+  hits: number;
+  wrongs: number;
+  misses: number;
+  duration_s: number;
+};
+
+export type PracticeSessionRead = PracticeRecord & {
+  id: string;
+  accuracy: number;
+  created_at: string;
+};
+
+export type PracticeHistory = {
+  sessions: PracticeSessionRead[];
+  best_accuracy: number | null;
+  total_duration_s: number;
+};
+
+export function recordPractice(
+  trackId: string,
+  body: PracticeRecord,
+): Promise<PracticeSessionRead> {
+  return request<PracticeSessionRead>(`/tracks/${trackId}/practice`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+export function getPracticeHistory(
+  trackId: string,
+  signal?: AbortSignal,
+): Promise<PracticeHistory> {
+  return request<PracticeHistory>(`/tracks/${trackId}/practice`, { signal });
+}
+
 export function describeDevice(device: DeviceInfo): string {
   if (!device.torch_installed) return "torch non installé (uv sync)";
   if (device.device === "cpu") return "CPU (aucun GPU détecté)";
