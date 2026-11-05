@@ -67,3 +67,4 @@ markers = [
     "ml: tests nécessitant les modèles ML",
 ]
 addopts = "-m 'not network and not ml'"
+filterwarnings = ["ignore::DeprecationWarning:audioread.*"]

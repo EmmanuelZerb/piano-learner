@@ -10,8 +10,9 @@ Application web locale et personnelle. Elle prend un audio (fichier ou URL YouTu
 | 1 — Ingestion audio (upload + YouTube → WAV 44,1 kHz) | ✅ |
 | 2 — Séparation des sources (Demucs htdemucs_6s, cache par hash) | ✅ |
 | 3 — Transcription (ByteDance + Basic Pitch, cache par paramètres) | ✅ |
-| 4 — Post-traitement (tempo, quantification, mains, niveaux) | ⏳ à faire |
-| 5–9 | voir le cahier des charges (API async, lecteur, entraînement, bibliothèque, finitions) |
+| 4 — Post-traitement (tempo, quantification, mains, niveaux, tonalité, accords) | ✅ |
+| 5 — API et tâches asynchrones (SSE, annulation, suppression) | ⏳ à faire |
+| 6–9 | voir le cahier des charges ( lecteur, entraînement, bibliothèque, finitions) |
 
 ## Architecture
 
@@ -22,11 +23,14 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/system.py          Détection ffmpeg/ffprobe et du device torch (cuda/mps/cpu)
   app/db.py              Moteur SQLite, migration minimale (add_missing_columns), get_session
   app/models/            Tables SQLModel (Track, avec transcribe_stems)
+  app/workflow.py        Enchaînement par morceau : separate → transcribe (→ arrange auto) ; arrange seul
   app/library.py         Dossiers de travail temporaires, enregistrement et déduplication (hash du WAV)
   app/api/deps.py        Dépendances communes (session, settings, get_track_or_404)
   app/api/tracks.py      Routes /tracks : upload, youtube, liste, détail, PATCH sélection, audio, miniature
   app/api/stems.py       Routes /tracks/{id}/separate, /stems, /stems/{name}
-  app/api/transcription.py  /tracks/{id}/transcribe (sépare si besoin), /transcription, /midi/{f}.mid, /transcription/defaults
+  app/api/transcription.py  /tracks/{id}/transcribe (sépare si besoin + régénère les niveaux), /transcription, /midi/{f}.mid, /transcription/defaults
+  app/api/arrangement.py /tracks/{id}/arrange (post-traitement seul), /arrangement, /arrangement/{niveau}.mid|.json, /arrangement/defaults
+  app/api/files.py       serve_track_file : fichiers générés, protégé contre la sortie du dossier
   app/pipeline/ingest.py Validation (octets d'en-tête + ffprobe), yt-dlp, normalisation ffmpeg
   app/pipeline/errors.py PipelineError(code, message, status) → {code, detail}
   app/pipeline/separate.py Demucs htdemucs_6s, cache par hash, verrou GPU, stems FLAC 24 bits
@@ -34,7 +38,13 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/pipeline/notes.py  Format pivot Note/Pedal/StemTranscription (JSON) : entrée du post-traitement
   app/pipeline/transcribe.py  ByteDance (piano) / Basic Pitch (autres), paramètres, cache, manifest
   app/pipeline/midi_io.py  Export pretty_midi : un instrument (= un canal) par stem, CC64 pour la pédale
-  app/pipeline/          (phases 4+) postprocess, jobs
+  app/pipeline/cleanup.py   Tessiture A0–C8, vélocité min, doublons entre stems, notes courtes
+  app/pipeline/rhythm.py    BeatGrid (librosa + régularisation), position en temps, quantification
+  app/pipeline/hands.py     Partage des mains par coût (heuristique isolée, remplaçable)
+  app/pipeline/harmony.py   Tonalité (Krumhansl-Schmuckler), accords par temps (gabarits)
+  app/pipeline/difficulty.py  Niveaux débutant / intermédiaire / avancé, cap_polyphony
+  app/pipeline/postprocess.py PostprocessParams, arrange(), écriture .mid/.json/manifest
+  app/pipeline/          (phase 5) jobs
   scripts/doctor.py      Diagnostic des prérequis
   scripts/check_ml_stack.py  Test de cohabitation et d'inférence des 3 modèles ML
   tests/                 pytest ; tests/synth.py = audio de test (synthé additif, Salamander, F1 mir_eval)
@@ -44,6 +54,8 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
     cache/stems/{wav_sha256}/htdemucs_6s/  {stem}.flac + manifest.json (écrit en dernier = cache complet)
     cache/transcriptions/{wav_sha256}/{stem}-{moteur}-{hash params}.json  notes brutes
     tracks/{id}/midi/    {stem}.mid, merged.mid, manifest.json (dernière transcription)
+    tracks/{id}/arrangement/  {beginner,intermediate,advanced}.mid/.json + manifest.json
+    cache/analysis/{wav_sha256}/beats.json  grille des temps
     models/salamander-test/  échantillons de piano pour le test ByteDance
     tmp/                 dossiers de travail (vidés automatiquement)
     models/              checkpoints (ByteDance…)
@@ -78,6 +90,18 @@ Les tests `network` et `ml` sont exclus par défaut. Pour les lancer : `uv run p
 - **Pistes à transcrire** : `Track.transcribe_stems` (None = piano + other + bass). La batterie est exclue. Elles se modifient via `PATCH /tracks/{id}`.
 - **Migrations** : `add_missing_columns` ajoute seulement des colonnes nullables. Il faudra passer à Alembic pour renommer ou transformer des colonnes.
 - **Dépendances ML** : groupe uv `ml` dans `default-groups`. `uv run` installe donc toujours torch et les autres paquets (sans ce réglage, `uv run` supprimait les paquets d'un extra). Pour une machine sans ML : `uv sync --no-group ml`.
+- **Post-traitement** : relit les JSON de transcription et `beats.json`, sans aucun modèle. Relancer prend environ 1 s (8 s la première fois, à cause de la détection des temps). La transcription régénère automatiquement les niveaux avec les derniers `PostprocessParams`.
+- **Ordre** : vélocité → tessiture → doublons → durée → quantification (en position de temps, donc elle suit le tempo) → mains → tonalité et accords → niveaux.
+- **Niveaux** :
+  - Débutant : mélodie en « skyline » (piste voix si transcrite, remontée en Do4–Mi6), fondamentale de chaque accord en Sol2–Sol3. Au plus 1 note par main, vérifié par un test sur 10 morceaux aléatoires.
+  - Intermédiaire : quantification à la croche à 100 %, au plus 3 notes par main ; on garde les voix extérieures.
+  - Avancé : tout le nettoyé.
+- **Format JSON d'un niveau** (lu par le lecteur en phase 6) : `{level, tempo, beats[], key, chords[[s,e,nom]], pedals[[s,e]], notes[[pitch,start,end,vel,hand]]}`. Les temps sont en secondes réelles de l'audio.
+- **MIDI d'arrangement** (mido) :
+  - Une piste Tempo (tempo, armure, 4/4, accords en `marker`), puis Main droite (canal 0) et Main gauche (canal 1).
+  - Carte de tempo construite sur les temps détectés (un seul tempo si la grille est régulière).
+  - Des temps de levée sont ajoutés avant le premier temps détecté. Le MIDI est donc décalé de quelques fractions de seconde par rapport à l'audio, contrairement au JSON.
+- **Limite connue** : librosa peut se caler sur les contretemps quand les charlestons dominent la grosse caisse (décalage d'un demi-temps, vu sur le morceau synthétique). L'impact sur la quantification à la croche est nul, mais les fenêtres d'accords sont décalées. Un réglage manuel de la phase sera à prévoir dans l'éditeur (phase 8).
 - Les routes d'import et de séparation sont synchrones (pool de threads) jusqu'à la phase 5, où elles deviendront des tâches de fond avec SSE.
 - **Pas de `make`** (Windows) : `npm run …` à la racine remplace `make dev`.
 - **torch / torchaudio < 2.9**, wheels **cu126** (index `pytorch-cu126` dans `pyproject.toml`) : demucs dépend des backends d'écriture torchaudio retirés en 2.9. Pour écrire les WAV, utiliser `soundfile`, pas `torchaudio.save`.

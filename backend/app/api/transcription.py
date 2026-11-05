@@ -1,17 +1,12 @@
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 
+from app import workflow
 from app.api.deps import SessionDep, SettingsDep, get_track_or_404
-from app.config import Settings
-from app.library import track_dir
+from app.api.files import serve_track_file
 from app.models import TRANSCRIBABLE_STEMS, Track
-from app.pipeline import separate as sep
 from app.pipeline import transcribe as tr
-from app.pipeline.ingest import WAV_NAME
-from app.system import torch_device
 
 router = APIRouter(tags=["transcription"])
 
@@ -45,10 +40,6 @@ class TranscriptionRead(BaseModel):
     elapsed_s: float | None = None
 
 
-def midi_dir(settings: Settings, track: Track) -> Path:
-    return track_dir(settings, track.id) / "midi"
-
-
 def _read(track: Track, manifest: dict | None) -> TranscriptionRead:
     if manifest is None:
         return TranscriptionRead(available=False)
@@ -75,30 +66,17 @@ def get_transcription(
     track_id: str, session: SessionDep, settings: SettingsDep
 ) -> TranscriptionRead:
     track = get_track_or_404(session, track_id)
-    return _read(track, tr.read_manifest(midi_dir(settings, track)))
+    return _read(track, tr.read_manifest(workflow.midi_dir(settings, track)))
 
 
 @router.post("/tracks/{track_id}/transcribe", response_model=TranscriptionRead)
 def transcribe_track(
     track_id: str, body: TranscribeRequest, session: SessionDep, settings: SettingsDep
 ) -> TranscriptionRead:
-    """Sépare si nécessaire (cache), puis transcrit. Synchrone jusqu'à la phase 5."""
+    """Sépare si nécessaire (cache), transcrit puis régénère les niveaux. Synchrone (phase 5)."""
     track = get_track_or_404(session, track_id)
-    device = torch_device()
-    separation = sep.separate(
-        track_dir(settings, track.id) / WAV_NAME,
-        sep.stems_dir(settings.stems_cache_dir, track.wav_sha256),
-        device,
-    )
-    result = tr.transcribe_stems(
-        separation.stems,
-        body.stems or track.stems_to_transcribe,
-        body.params,
-        settings.transcriptions_cache_dir / track.wav_sha256,
-        midi_dir(settings, track),
-        device,
-        settings.models_dir,
-    )
+    stems = body.stems or track.stems_to_transcribe
+    result = workflow.transcribe(settings, track, stems, body.params)
     return _read(track, result.manifest)
 
 
@@ -107,10 +85,6 @@ def get_midi(
     track_id: str, filename: str, session: SessionDep, settings: SettingsDep
 ) -> FileResponse:
     track = get_track_or_404(session, track_id)
-    directory = midi_dir(settings, track).resolve()
-    path = (directory / filename).resolve()
-    # Le nom vient de l'URL : on n'accepte que les fichiers .mid produits dans ce dossier.
-    if path.suffix != ".mid" or path.parent != directory or not path.exists():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "MIDI introuvable (transcription lancée ?).")
-    download_name = f"{track.title} - {path.stem}.mid"
-    return FileResponse(path, media_type="audio/midi", filename=download_name)
+    if not filename.endswith(".mid"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "MIDI introuvable.")
+    return serve_track_file(workflow.midi_dir(settings, track), filename, track.title)

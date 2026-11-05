@@ -33,6 +33,10 @@ class Settings(BaseSettings):
         return self.storage_dir / "cache" / "transcriptions"
 
     @property
+    def analysis_cache_dir(self) -> Path:
+        return self.storage_dir / "cache" / "analysis"
+
+    @property
     def models_dir(self) -> Path:
         return self.storage_dir / "models"
 

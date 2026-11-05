@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { ArrangementPanel } from "@/components/ArrangementPanel";
 import { StemsPanel } from "@/components/StemsPanel";
 import { TranscriptionPanel } from "@/components/TranscriptionPanel";
 import { getTrack, mediaUrl, type Track } from "@/lib/api";
@@ -13,8 +14,8 @@ export function TrackDetail() {
   const { id } = useParams<{ id: string }>();
   const [track, setTrack] = useState<Track | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // La transcription peut déclencher la séparation : on recharge alors la liste des stems.
-  const [stemsVersion, setStemsVersion] = useState(0);
+  // La transcription déclenche séparation et niveaux : on recharge alors ces panneaux.
+  const [pipelineVersion, setPipelineVersion] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -57,8 +58,9 @@ export function TrackDetail() {
         <audio controls preload="none" src={mediaUrl(track.audio_url)} className="w-full" />
       </section>
 
-      <StemsPanel key={stemsVersion} track={track} onTrackChange={setTrack} />
-      <TranscriptionPanel track={track} onTranscribed={() => setStemsVersion((v) => v + 1)} />
+      <StemsPanel key={pipelineVersion} track={track} onTrackChange={setTrack} />
+      <TranscriptionPanel track={track} onTranscribed={() => setPipelineVersion((v) => v + 1)} />
+      <ArrangementPanel key={`a${pipelineVersion}`} trackId={track.id} />
     </>
   );
 }

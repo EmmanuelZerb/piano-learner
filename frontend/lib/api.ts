@@ -159,6 +159,52 @@ export function transcribeTrack(id: string, params: TranscribeParams): Promise<T
   });
 }
 
+export type Level = "beginner" | "intermediate" | "advanced";
+
+export type PostprocessParams = {
+  quantize: "none" | "eighth" | "sixteenth" | "triplet";
+  quantize_strength: number;
+  min_note_ms: number;
+  min_velocity: number;
+  merge_window_ms: number;
+  split_point: number;
+  dynamic_split: boolean;
+  melody_from_vocals: boolean;
+};
+
+export type Arrangement = {
+  available: boolean;
+  tempo: number | null;
+  key: string | null;
+  chords: number | null;
+  levels: {
+    level: Level;
+    right_notes: number;
+    left_notes: number;
+    max_polyphony_right: number;
+    max_polyphony_left: number;
+    midi_url: string;
+    notes_url: string;
+  }[];
+  params: PostprocessParams | null;
+};
+
+export function getArrangementDefaults(signal?: AbortSignal): Promise<PostprocessParams> {
+  return request<PostprocessParams>("/arrangement/defaults", { signal });
+}
+
+export function getArrangement(id: string, signal?: AbortSignal): Promise<Arrangement> {
+  return request<Arrangement>(`/tracks/${id}/arrangement`, { signal });
+}
+
+export function arrangeTrack(id: string, params: PostprocessParams): Promise<Arrangement> {
+  return request<Arrangement>(`/tracks/${id}/arrange`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}
+
 export function describeDevice(device: DeviceInfo): string {
   if (!device.torch_installed) return "torch non installé (uv sync)";
   if (device.device === "cpu") return "CPU (aucun GPU détecté)";

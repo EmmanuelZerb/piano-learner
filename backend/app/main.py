@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.api.arrangement import router as arrangement_router
 from app.api.stems import router as stems_router
 from app.api.tracks import router as tracks_router
 from app.api.transcription import router as transcription_router
@@ -41,6 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(tracks_router)
     app.include_router(stems_router)
     app.include_router(transcription_router)
+    app.include_router(arrangement_router)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:

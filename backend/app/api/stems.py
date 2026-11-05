@@ -5,14 +5,12 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from app import workflow
 from app.api.deps import SessionDep, SettingsDep, get_track_or_404
 from app.config import Settings
-from app.library import track_dir
 from app.models import Track
 from app.pipeline import separate as sep
 from app.pipeline.errors import PipelineError
-from app.pipeline.ingest import WAV_NAME
-from app.system import torch_device
 
 router = APIRouter(prefix="/tracks/{track_id}", tags=["stems"])
 
@@ -62,9 +60,7 @@ def separate_track(track_id: str, session: SessionDep, settings: SettingsDep) ->
     track = get_track_or_404(session, track_id)
     if importlib.util.find_spec("demucs") is None:
         raise PipelineError("ml_missing", "Stack ML absente : lance `uv sync` dans backend.", 503)
-    result = sep.separate(
-        track_dir(settings, track.id) / WAV_NAME, _stems_dir(settings, track), torch_device()
-    )
+    result = workflow.separate(settings, track)
     return _stems_read(
         track, result.stems, cached=result.cached, elapsed_s=round(result.elapsed_s, 1)
     )

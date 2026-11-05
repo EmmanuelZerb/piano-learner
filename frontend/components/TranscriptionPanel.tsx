@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { Slider } from "@/components/Slider";
 import {
   getTranscription,
   getTranscriptionDefaults,
@@ -19,35 +20,6 @@ const ENGINE_LABELS: Record<string, string> = {
   bytedance: "ByteDance (piano)",
   basic_pitch: "Basic Pitch",
 };
-
-function Slider(props: {
-  label: string;
-  hint: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="block text-sm">
-      <span className="flex justify-between">
-        <span>{props.label}</span>
-        <span className="font-mono text-zinc-500">{props.value}</span>
-      </span>
-      <input
-        type="range"
-        min={props.min}
-        max={props.max}
-        step={props.step}
-        value={props.value}
-        onChange={(e) => props.onChange(Number(e.target.value))}
-        className="w-full"
-      />
-      <span className="text-xs text-zinc-500">{props.hint}</span>
-    </label>
-  );
-}
 
 export function TranscriptionPanel({ track, onTranscribed }: Props) {
   const [result, setResult] = useState<Transcription | null>(null);
