@@ -1,8 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.config import get_settings
+from app.api.tracks import router as tracks_router
+from app.config import Settings, get_settings
+from app.db import make_engine
+from app.pipeline.ingest import IngestError
 from app.system import DeviceInfo, ToolInfo, device_info, ffmpeg_info, ffprobe_info
 
 
@@ -13,17 +17,26 @@ class HealthResponse(BaseModel):
     device: DeviceInfo
 
 
-def create_app() -> FastAPI:
-    settings = get_settings()
+async def ingest_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, IngestError)
+    return JSONResponse({"code": exc.code, "detail": exc.message}, status_code=exc.status_code)
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
 
     app = FastAPI(title="Piano Learner API", version="0.1.0")
+    app.state.settings = settings
+    app.state.engine = make_engine(settings.database_url)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_exception_handler(IngestError, ingest_error_handler)
+    app.include_router(tracks_router)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:

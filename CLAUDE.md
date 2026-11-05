@@ -7,21 +7,31 @@ Application web locale et personnelle. Elle prend un audio (fichier ou URL YouTu
 | Phase | Statut |
 |---|---|
 | 0 — Initialisation (monorepo, `/health`, test de la stack ML) | ✅ |
-| 1 — Ingestion audio (upload + YouTube → WAV 44,1 kHz) | ⏳ à faire |
+| 1 — Ingestion audio (upload + YouTube → WAV 44,1 kHz) | ✅ |
+| 2 — Séparation des sources (Demucs htdemucs_6s) | ⏳ à faire |
 | 2–9 | voir le cahier des charges (séparation, transcription, post-traitement, API async, lecteur, entraînement, bibliothèque, finitions) |
 
 ## Architecture
 
 ```
 backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
-  app/main.py            FastAPI : create_app(), routes
+  app/main.py            create_app(settings) : moteur DB, CORS, handler IngestError, /health
   app/config.py          Settings (pydantic-settings, préfixe d'env PIANO_, backend/.env)
   app/system.py          Détection ffmpeg/ffprobe et du device torch (cuda/mps/cpu)
-  app/pipeline/          (phases 1+) ingest, separate, transcribe, postprocess, jobs
+  app/db.py              Moteur SQLite (SQLModel) + dépendance get_session
+  app/models/            Tables SQLModel (Track)
+  app/library.py         Dossiers de travail temporaires, enregistrement et déduplication (hash du WAV)
+  app/api/tracks.py      Routes /tracks : upload, youtube, liste, détail, audio, miniature
+  app/pipeline/ingest.py Validation (octets d'en-tête + ffprobe), yt-dlp, normalisation ffmpeg
+  app/pipeline/          (phases 2+) separate, transcribe, postprocess, jobs
   scripts/doctor.py      Diagnostic des prérequis
   scripts/check_ml_stack.py  Test de cohabitation et d'inférence des 3 modèles ML
   tests/                 pytest
-  storage/               Généré, ignoré par git : app.db, médias, models/
+  storage/               Généré, ignoré par git :
+    app.db               SQLite
+    tracks/{id}/         source.<ext>, audio.wav (stéréo 44,1 kHz s16), thumbnail.jpg
+    tmp/                 dossiers de travail (vidés automatiquement)
+    models/              checkpoints (ByteDance…)
 frontend/                Next.js 16 (App Router), React 19, TS strict, Tailwind 4, vitest
   app/                   Pages
   components/            Composants (player/ arrivera en phase 6)
@@ -46,6 +56,9 @@ Les tests `network` et `ml` sont exclus par défaut. Pour les lancer : `uv run p
 
 ## Décisions et pièges connus
 
+- **Ingestion** : le type réel est détecté par les octets d'en-tête puis confirmé par ffprobe (l'extension est ignorée). Limites : `PIANO_MAX_UPLOAD_MB` (200) et `PIANO_MAX_DURATION_MIN` (20). Les erreurs utilisateur sont des `IngestError(code, message, status)`, sérialisées en `{code, detail}`.
+- **YouTube** : l'URL est réduite à l'ID de la vidéo puis reconstruite sous forme canonique (jamais de playlist, jamais l'URL brute passée à yt-dlp). yt-dlp utilise Node comme runtime JS (`js_runtimes`). Quand YouTube change, faire `cd backend; uv lock --upgrade-package yt-dlp`. Le test réseau utilise « Me at the zoo » (jNQXAC9IVRw), car la vidéo de test de youtube-dl a été supprimée.
+- Les routes d'import sont synchrones (pool de threads) jusqu'à la phase 5, où elles deviendront des tâches de fond avec SSE.
 - **Pas de `make`** (Windows) : `npm run …` à la racine remplace `make dev`.
 - **torch / torchaudio < 2.9**, wheels **cu126** (index `pytorch-cu126` dans `pyproject.toml`) : demucs dépend des backends d'écriture torchaudio retirés en 2.9. Pour écrire les WAV, utiliser `soundfile`, pas `torchaudio.save`.
 - **Basic Pitch sans TensorFlow** : sous Windows / Python 3.11, basic-pitch 0.4 exige TF 2.14, qui n'est pas installable. On l'exclut via `[tool.uv] override-dependencies`, et basic-pitch utilise automatiquement `nmp.onnx` avec `onnxruntime` (sur CPU). Les warnings « Coremltools/TFLite/Tensorflow is not installed » sont normaux.
