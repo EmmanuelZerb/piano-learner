@@ -2,6 +2,7 @@
 entre étapes. Les routes l'appellent directement ; les tâches de fond (phase 5) aussi.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 from app.config import Settings
@@ -14,6 +15,9 @@ from app.pipeline.errors import PipelineError
 from app.pipeline.ingest import WAV_NAME
 from app.pipeline.notes import StemTranscription
 from app.system import torch_device
+
+ProgressFn = Callable[[float], None]
+StepFn = Callable[[str, float], None]
 
 
 def wav_path(settings: Settings, track: Track) -> Path:
@@ -28,19 +32,32 @@ def arrangement_dir(settings: Settings, track: Track) -> Path:
     return track_dir(settings, track.id) / "arrangement"
 
 
-def separate(settings: Settings, track: Track) -> sep.SeparationResult:
+def separate(
+    settings: Settings, track: Track, on_progress: ProgressFn | None = None
+) -> sep.SeparationResult:
     return sep.separate(
         wav_path(settings, track),
         sep.stems_dir(settings.stems_cache_dir, track.wav_sha256),
         torch_device(),
+        on_progress=on_progress,
     )
 
 
 def transcribe(
-    settings: Settings, track: Track, stems: list[str], params: tr.TranscribeParams
+    settings: Settings,
+    track: Track,
+    stems: list[str],
+    params: tr.TranscribeParams,
+    postprocess: pp.PostprocessParams | None = None,
+    on_step: StepFn | None = None,
 ) -> tr.TranscriptionResult:
-    """Sépare si besoin, transcrit, puis régénère les arrangements avec leurs derniers réglages."""
-    separation = separate(settings, track)
+    """Sépare si besoin, transcrit, puis régénère les niveaux (avec `postprocess`, ou à défaut
+    les derniers réglages utilisés). `on_step(étape, fraction)` suit l'avancement."""
+
+    def progress(step: str) -> ProgressFn | None:
+        return (lambda fraction: on_step(step, fraction)) if on_step else None
+
+    separation = separate(settings, track, progress("separate"))
     result = tr.transcribe_stems(
         separation.stems,
         stems,
@@ -49,9 +66,14 @@ def transcribe(
         midi_dir(settings, track),
         torch_device(),
         settings.models_dir,
+        on_progress=progress("transcribe"),
     )
-    previous = pp.read_manifest(arrangement_dir(settings, track))
-    arrange(settings, track, pp.PostprocessParams(**previous["params"]) if previous else None)
+    if on_step:
+        on_step("arrange", 0.0)
+    if postprocess is None:
+        previous = pp.read_manifest(arrangement_dir(settings, track))
+        postprocess = pp.PostprocessParams(**previous["params"]) if previous else None
+    arrange(settings, track, postprocess)
     return result
 
 

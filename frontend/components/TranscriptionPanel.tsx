@@ -7,24 +7,26 @@ import {
   getTranscription,
   getTranscriptionDefaults,
   mediaUrl,
-  transcribeTrack,
   type Track,
   type TranscribeParams,
   type Transcription,
 } from "@/lib/api";
 import { STEM_LABELS } from "@/lib/stems";
 
-type Props = { track: Track; onTranscribed: () => void };
+type Props = {
+  track: Track;
+  busy: boolean; // une tâche tourne déjà sur ce morceau
+  onTranscribe: (params: TranscribeParams) => void;
+};
 
 const ENGINE_LABELS: Record<string, string> = {
   bytedance: "ByteDance (piano)",
   basic_pitch: "Basic Pitch",
 };
 
-export function TranscriptionPanel({ track, onTranscribed }: Props) {
+export function TranscriptionPanel({ track, busy, onTranscribe }: Props) {
   const [result, setResult] = useState<Transcription | null>(null);
   const [params, setParams] = useState<TranscribeParams | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -43,20 +45,6 @@ export function TranscriptionPanel({ track, onTranscribed }: Props) {
     return () => controller.abort();
   }, [track.id]);
 
-  async function run() {
-    if (!params) return;
-    setBusy(true);
-    setError(null);
-    try {
-      setResult(await transcribeTrack(track.id, params));
-      onTranscribed();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const setBasicPitch = (patch: Partial<TranscribeParams["basic_pitch"]>) =>
     setParams((p) => p && { ...p, basic_pitch: { ...p.basic_pitch, ...patch } });
   const setPiano = (patch: Partial<TranscribeParams["piano"]>) =>
@@ -73,11 +61,11 @@ export function TranscriptionPanel({ track, onTranscribed }: Props) {
           </p>
         </div>
         <button
-          onClick={run}
+          onClick={() => params && onTranscribe(params)}
           disabled={busy || !params}
           className="shrink-0 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
         >
-          {busy ? "Transcription…" : result?.available ? "Retranscrire" : "Transcrire"}
+          {result?.available ? "Retranscrire" : "Transcrire"}
         </button>
       </div>
 
@@ -157,11 +145,6 @@ export function TranscriptionPanel({ track, onTranscribed }: Props) {
         </details>
       )}
 
-      {busy && (
-        <p className="mb-4 text-sm text-zinc-500">
-          Transcription en cours (environ 10 à 60 s selon la longueur et le nombre de pistes)…
-        </p>
-      )}
       {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
 
       {result?.available && (

@@ -1,13 +1,13 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import select
 
 from app.api.deps import SessionDep, SettingsDep, get_track_or_404
-from app.library import register_track, track_dir, work_dir
+from app.library import delete_track, register_track, track_dir, work_dir
 from app.models import TRANSCRIBABLE_STEMS, Track, TrackSource
 from app.pipeline.ingest import THUMBNAIL_NAME, WAV_NAME, ingest_upload, ingest_youtube
 
@@ -108,6 +108,18 @@ def update_track(track_id: str, body: TrackUpdate, session: SessionDep) -> Track
     session.commit()
     session.refresh(track)
     return TrackRead.from_track(track)
+
+
+@router.delete("/{track_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_track(
+    track_id: str, request: Request, session: SessionDep, settings: SettingsDep
+) -> None:
+    track = get_track_or_404(session, track_id)
+    if request.app.state.jobs.has_active(track.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Un traitement est en cours : annule-le avant de supprimer."
+        )
+    delete_track(session, settings, track)
 
 
 @router.get("/{track_id}/audio")

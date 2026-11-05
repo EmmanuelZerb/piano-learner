@@ -1,41 +1,48 @@
 "use client";
 
-import { useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import { importYoutube, uploadTrack, type TrackCreated } from "@/lib/api";
+import { JobProgress } from "@/components/JobProgress";
+import { createUploadJob, createYoutubeJob, listJobs, type Job } from "@/lib/api";
 
 const ACCEPT = ".mp3,.wav,.flac,.m4a,audio/mpeg,audio/wav,audio/flac,audio/mp4";
-
-type Status =
-  | { kind: "idle" }
-  | { kind: "busy"; label: string }
-  | { kind: "error"; message: string }
-  | { kind: "done"; message: string };
 
 export function ImportPanel({ onImported }: { onImported: () => void }) {
   const [url, setUrl] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [processAll, setProcessAll] = useState(true);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const busy = status.kind === "busy";
 
-  async function run(label: string, action: () => Promise<TrackCreated>) {
-    setStatus({ kind: "busy", label });
+  // Les tâches continuent côté serveur : on les retrouve après un rechargement de la page.
+  useEffect(() => {
+    const controller = new AbortController();
+    listJobs({ active: true }, controller.signal)
+      .then((active) => setJobs(active.filter((j) => j.source !== "track")))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+
+  async function start(action: () => Promise<Job>) {
+    setSending(true);
+    setError(null);
     try {
-      const { track, duplicate } = await action();
-      const message = duplicate
-        ? `« ${track.title} » est déjà dans la bibliothèque.`
-        : `« ${track.title} » importé.`;
-      setStatus({ kind: "done", message });
-      onImported();
+      const job = await action();
+      setJobs((current) => [job, ...current]);
     } catch (err) {
-      setStatus({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSending(false);
     }
   }
 
+  const options = { until: processAll ? ("transcribe" as const) : ("ingest" as const) };
+
   function handleFile(file: File | undefined) {
-    if (!file || busy) return;
-    void run(`Import de ${file.name}…`, () => uploadTrack(file));
+    if (!file || sending) return;
+    void start(() => createUploadJob(file, options));
   }
 
   function handleDrop(event: DragEvent) {
@@ -46,11 +53,11 @@ export function ImportPanel({ onImported }: { onImported: () => void }) {
 
   function handleYoutube(event: FormEvent) {
     event.preventDefault();
-    if (!url.trim() || busy) return;
-    void run("Téléchargement depuis YouTube…", async () => {
-      const result = await importYoutube(url.trim());
+    if (!url.trim() || sending) return;
+    void start(async () => {
+      const job = await createYoutubeJob(url.trim(), options);
       setUrl("");
-      return result;
+      return job;
     });
   }
 
@@ -59,7 +66,7 @@ export function ImportPanel({ onImported }: { onImported: () => void }) {
       <div
         role="button"
         tabIndex={0}
-        aria-disabled={busy}
+        aria-disabled={sending}
         onClick={() => fileInput.current?.click()}
         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && fileInput.current?.click()}
         onDragOver={(e) => {
@@ -72,7 +79,7 @@ export function ImportPanel({ onImported }: { onImported: () => void }) {
           dragging
             ? "border-emerald-500 bg-emerald-500/5"
             : "border-zinc-300 hover:border-zinc-400 dark:border-zinc-700"
-        } ${busy ? "pointer-events-none opacity-50" : ""}`}
+        } ${sending ? "pointer-events-none opacity-50" : ""}`}
       >
         <p className="font-medium">Glisse un fichier audio ici ou clique pour choisir</p>
         <p className="mt-1 text-sm text-zinc-500">MP3, WAV, FLAC ou M4A</p>
@@ -94,21 +101,36 @@ export function ImportPanel({ onImported }: { onImported: () => void }) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://www.youtube.com/watch?v=…"
-          disabled={busy}
+          disabled={sending}
           className="flex-1 rounded-lg border border-zinc-300 bg-transparent px-3 py-2 text-sm dark:border-zinc-700"
         />
         <button
           type="submit"
-          disabled={busy || !url.trim()}
+          disabled={sending || !url.trim()}
           className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
         >
           Importer
         </button>
       </form>
 
-      {status.kind === "busy" && <p className="text-sm text-zinc-500">{status.label}</p>}
-      {status.kind === "error" && <p className="text-sm text-red-500">{status.message}</p>}
-      {status.kind === "done" && <p className="text-sm text-emerald-600">{status.message}</p>}
+      <label className="flex items-center gap-2 text-sm text-zinc-500">
+        <input
+          type="checkbox"
+          checked={processAll}
+          onChange={(e) => setProcessAll(e.target.checked)}
+        />
+        Traiter automatiquement : séparation, transcription et niveaux de difficulté
+      </label>
+
+      {error && <p className="text-sm text-red-500">{error}</p>}
+
+      {jobs.length > 0 && (
+        <div className="space-y-2">
+          {jobs.map((job) => (
+            <JobProgress key={job.id} job={job} onFinished={onImported} showTrackLink />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

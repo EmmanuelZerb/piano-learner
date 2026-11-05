@@ -9,12 +9,13 @@ import json
 import re
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 from urllib.parse import parse_qs, urlparse
 
-from app.pipeline.errors import PipelineError
+from app.pipeline.errors import Cancelled, PipelineError
 
 WAV_NAME = "audio.wav"
 THUMBNAIL_NAME = "thumbnail.jpg"
@@ -132,9 +133,8 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def ingest_upload(
-    src: BinaryIO, filename: str, work_dir: Path, max_bytes: int, max_duration_s: float
-) -> IngestedAudio:
+def save_upload(src: BinaryIO, filename: str, work_dir: Path, max_bytes: int) -> Path:
+    """Étape rapide (faite pendant la requête) : copie bornée + vérification du type réel."""
     suffix = Path(filename).suffix.lower()[:8] or ".bin"
     source = work_dir / f"source{suffix}"
     save_stream(src, source, max_bytes)
@@ -147,7 +147,20 @@ def ingest_upload(
             "Format non reconnu : seuls les vrais fichiers MP3, WAV, FLAC et M4A sont acceptés.",
             415,
         )
+    return source
 
+
+def ingest_upload(
+    src: BinaryIO, filename: str, work_dir: Path, max_bytes: int, max_duration_s: float
+) -> IngestedAudio:
+    source = save_upload(src, filename, work_dir, max_bytes)
+    return ingest_saved_upload(source, filename, work_dir, max_duration_s)
+
+
+def ingest_saved_upload(
+    source: Path, filename: str, work_dir: Path, max_duration_s: float
+) -> IngestedAudio:
+    """Étape lente (faite en tâche de fond) : analyse ffprobe + conversion en WAV."""
     probe = probe_audio(source)
     check_duration(probe.duration_s, max_duration_s)
     normalize_to_wav(source, work_dir / WAV_NAME)
@@ -235,12 +248,26 @@ def _artist_from_info(info: dict) -> str | None:
     return str(uploader).removesuffix(" - Topic") if uploader else None
 
 
-def download_youtube(video_id: str, work_dir: Path, max_duration_s: float) -> tuple[Path, dict]:
+def download_youtube(
+    video_id: str,
+    work_dir: Path,
+    max_duration_s: float,
+    on_progress: Callable[[float], None] | None = None,
+) -> tuple[Path, dict]:
     """Télécharge la meilleure piste audio + la miniature (jpg). Renvoie (fichier, infos)."""
     from yt_dlp import YoutubeDL
-    from yt_dlp.utils import DownloadError
+    from yt_dlp.utils import DownloadCancelled, DownloadError
+
+    def hook(d: dict) -> None:
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        if on_progress and d.get("status") == "downloading" and total:
+            try:
+                on_progress(min(1.0, d.get("downloaded_bytes", 0) / total))
+            except Cancelled as exc:  # yt-dlp n'interrompt proprement que sur sa propre exception
+                raise DownloadCancelled() from exc
 
     opts = {
+        "progress_hooks": [hook],
         "format": "bestaudio/best",
         "outtmpl": str(work_dir / "source.%(ext)s"),
         "noplaylist": True,
@@ -261,6 +288,8 @@ def download_youtube(video_id: str, work_dir: Path, max_duration_s: float) -> tu
                 raise PipelineError("live", "Les directs ne sont pas acceptés.")
             check_duration(float(info.get("duration") or 0), max_duration_s)
             info = ydl.process_ie_result(info, download=True)
+    except DownloadCancelled as exc:
+        raise Cancelled() from exc
     except DownloadError as exc:
         raise classify_youtube_error(str(exc)) from exc
 
@@ -270,9 +299,14 @@ def download_youtube(video_id: str, work_dir: Path, max_duration_s: float) -> tu
     return Path(downloads[0]["filepath"]), info
 
 
-def ingest_youtube(url: str, work_dir: Path, max_duration_s: float) -> IngestedAudio:
+def ingest_youtube(
+    url: str,
+    work_dir: Path,
+    max_duration_s: float,
+    on_progress: Callable[[float], None] | None = None,
+) -> IngestedAudio:
     video_id = validate_youtube_url(url)
-    source, info = download_youtube(video_id, work_dir, max_duration_s)
+    source, info = download_youtube(video_id, work_dir, max_duration_s, on_progress)
 
     thumb = work_dir / "source.jpg"
     if thumb.exists():

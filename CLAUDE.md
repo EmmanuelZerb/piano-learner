@@ -11,18 +11,20 @@ Application web locale et personnelle. Elle prend un audio (fichier ou URL YouTu
 | 2 — Séparation des sources (Demucs htdemucs_6s, cache par hash) | ✅ |
 | 3 — Transcription (ByteDance + Basic Pitch, cache par paramètres) | ✅ |
 | 4 — Post-traitement (tempo, quantification, mains, niveaux, tonalité, accords) | ✅ |
-| 5 — API et tâches asynchrones (SSE, annulation, suppression) | ⏳ à faire |
-| 6–9 | voir le cahier des charges ( lecteur, entraînement, bibliothèque, finitions) |
+| 5 — API et tâches asynchrones (SSE, annulation, suppression) | ✅ |
+| 6 — Lecteur « notes qui tombent » | ⏳ à faire |
+| 7–9 | voir le cahier des charges ( lecteur, entraînement, bibliothèque, finitions) |
 
 ## Architecture
 
 ```
 backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
-  app/main.py            create_app(settings) : moteur DB, CORS, handler PipelineError, /health
+  app/main.py            create_app(settings) : moteur DB, JobManager (lifespan), CORS, handler PipelineError, /health
+  app/jobs.py            JobManager : file asyncio + 1 worker (thread), progression en mémoire → SSE, annulation, reprise au démarrage ; run_process
   app/config.py          Settings (pydantic-settings, préfixe d'env PIANO_, backend/.env)
   app/system.py          Détection ffmpeg/ffprobe et du device torch (cuda/mps/cpu)
   app/db.py              Moteur SQLite, migration minimale (add_missing_columns), get_session
-  app/models/            Tables SQLModel (Track, avec transcribe_stems)
+  app/models/            Tables SQLModel (Track avec transcribe_stems, Job)
   app/workflow.py        Enchaînement par morceau : separate → transcribe (→ arrange auto) ; arrange seul
   app/library.py         Dossiers de travail temporaires, enregistrement et déduplication (hash du WAV)
   app/api/deps.py        Dépendances communes (session, settings, get_track_or_404)
@@ -30,6 +32,7 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/api/stems.py       Routes /tracks/{id}/separate, /stems, /stems/{name}
   app/api/transcription.py  /tracks/{id}/transcribe (sépare si besoin + régénère les niveaux), /transcription, /midi/{f}.mid, /transcription/defaults
   app/api/arrangement.py /tracks/{id}/arrange (post-traitement seul), /arrangement, /arrangement/{niveau}.mid|.json, /arrangement/defaults
+  app/api/jobs.py        /jobs/youtube, /jobs/upload, /tracks/{id}/jobs, /jobs, /jobs/{id}, /jobs/{id}/events (SSE), /jobs/{id}/cancel
   app/api/files.py       serve_track_file : fichiers générés, protégé contre la sortie du dossier
   app/pipeline/ingest.py Validation (octets d'en-tête + ffprobe), yt-dlp, normalisation ffmpeg
   app/pipeline/errors.py PipelineError(code, message, status) → {code, detail}
@@ -44,7 +47,6 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/pipeline/harmony.py   Tonalité (Krumhansl-Schmuckler), accords par temps (gabarits)
   app/pipeline/difficulty.py  Niveaux débutant / intermédiaire / avancé, cap_polyphony
   app/pipeline/postprocess.py PostprocessParams, arrange(), écriture .mid/.json/manifest
-  app/pipeline/          (phase 5) jobs
   scripts/doctor.py      Diagnostic des prérequis
   scripts/check_ml_stack.py  Test de cohabitation et d'inférence des 3 modèles ML
   tests/                 pytest ; tests/synth.py = audio de test (synthé additif, Salamander, F1 mir_eval)
@@ -102,7 +104,22 @@ Les tests `network` et `ml` sont exclus par défaut. Pour les lancer : `uv run p
   - Carte de tempo construite sur les temps détectés (un seul tempo si la grille est régulière).
   - Des temps de levée sont ajoutés avant le premier temps détecté. Le MIDI est donc décalé de quelques fractions de seconde par rapport à l'audio, contrairement au JSON.
 - **Limite connue** : librosa peut se caler sur les contretemps quand les charlestons dominent la grosse caisse (décalage d'un demi-temps, vu sur le morceau synthétique). L'impact sur la quantification à la croche est nul, mais les fenêtres d'accords sont décalées. Un réglage manuel de la phase sera à prévoir dans l'éditeur (phase 8).
-- Les routes d'import et de séparation sont synchrones (pool de threads) jusqu'à la phase 5, où elles deviendront des tâches de fond avec SSE.
+- **Tâches de fond** :
+  - Le frontend passe uniquement par `/jobs`. Les routes synchrones (`/tracks/upload`, `/tracks/youtube`, `/separate`, `/transcribe`, `/arrange`) restent disponibles pour les scripts et les tests ; elles utilisent les mêmes fonctions de `workflow.py`.
+  - Un seul worker : les traitements passent les uns après les autres.
+  - Une tâche « process » enchaîne import (YouTube ou fichier), séparation, transcription et niveaux, jusqu'à l'étape `options.until` (ingest, separate ou transcribe).
+  - Progression globale : download 0–15 %, convert 10–15 %, separate 15–55 %, transcribe 55–95 %, arrange 95–100 %.
+  - L'état courant vit en mémoire (`JobManager._live`) ; la base n'est écrite qu'aux changements d'étape ou de statut. SSE : un `data: <JobRead JSON>` par mise à jour, `: ping` toutes les 15 s.
+  - Upload : la copie et la vérification du type se font pendant la requête (415/413 immédiats) ; ffprobe et la conversion se font dans la tâche. Les fichiers en attente sont dans `tmp/` et le worker les nettoie.
+  - Au démarrage, les tâches non terminées passent en `error/interrupted` et `tmp/` est vidé.
+- **Annulation** : coopérative, via `Cancelled` levée par les callbacks de progression.
+  - yt-dlp : `DownloadCancelled` dans le hook de progression.
+  - Demucs : callback par segment (réagit en moins d'une seconde).
+  - Transcription : entre deux stems seulement. ByteDance traite une piste d'un bloc (environ 15–20 s pour 3 min), d'où ce délai avant l'arrêt.
+  - Une tâche annulée ne laisse pas de manifest partiel. Les caches déjà écrits restent valides.
+- **Suppression** (`DELETE /tracks/{id}`) : dossier du morceau, caches stems/notes/temps (par hash) et tâches associées. Elle est refusée (409) si une tâche est active sur le morceau.
+- SQLite en WAL avec un timeout de 30 s : l'API lit pendant que le worker écrit.
+- Mesure : YouTube « Me at the zoo » (19 s) traité de bout en bout en 29 s (téléchargement, séparation, transcription, niveaux).
 - **Pas de `make`** (Windows) : `npm run …` à la racine remplace `make dev`.
 - **torch / torchaudio < 2.9**, wheels **cu126** (index `pytorch-cu126` dans `pyproject.toml`) : demucs dépend des backends d'écriture torchaudio retirés en 2.9. Pour écrire les WAV, utiliser `soundfile`, pas `torchaudio.save`.
 - **Basic Pitch sans TensorFlow** : sous Windows / Python 3.11, basic-pitch 0.4 exige TF 2.14, qui n'est pas installable. On l'exclut via `[tool.uv] override-dependencies`, et basic-pitch utilise automatiquement `nmp.onnx` avec `onnxruntime` (sur CPU). Les warnings « Coremltools/TFLite/Tensorflow is not installed » sont normaux.

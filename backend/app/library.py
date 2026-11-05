@@ -9,7 +9,7 @@ from uuid import uuid4
 from sqlmodel import Session, select
 
 from app.config import Settings
-from app.models import Track, TrackSource
+from app.models import Job, Track, TrackSource
 from app.pipeline.ingest import WAV_NAME, IngestedAudio, sha256_file
 
 
@@ -26,6 +26,21 @@ def work_dir(settings: Settings) -> Iterator[Path]:
 
 def track_dir(settings: Settings, track_id: str) -> Path:
     return settings.tracks_dir / track_id
+
+
+def delete_track(session: Session, settings: Settings, track: Track) -> None:
+    """Supprime le morceau, ses fichiers, ses caches (stems, notes, temps) et ses tâches."""
+    shutil.rmtree(track_dir(settings, track.id), ignore_errors=True)
+    for cache in (
+        settings.stems_cache_dir,
+        settings.transcriptions_cache_dir,
+        settings.analysis_cache_dir,
+    ):
+        shutil.rmtree(cache / track.wav_sha256, ignore_errors=True)
+    for job in session.exec(select(Job).where(Job.track_id == track.id)).all():
+        session.delete(job)
+    session.delete(track)
+    session.commit()
 
 
 def register_track(

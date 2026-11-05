@@ -43,8 +43,6 @@ export type Stems = {
   elapsed_s: number | null;
 };
 
-export type TrackCreated = { track: Track; duplicate: boolean };
-
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -88,20 +86,6 @@ export function listTracks(signal?: AbortSignal): Promise<Track[]> {
   return request<Track[]>("/tracks", { signal });
 }
 
-export function uploadTrack(file: File): Promise<TrackCreated> {
-  const form = new FormData();
-  form.append("file", file);
-  return request<TrackCreated>("/tracks/upload", { method: "POST", body: form });
-}
-
-export function importYoutube(url: string): Promise<TrackCreated> {
-  return request<TrackCreated>("/tracks/youtube", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
-}
-
 export function getTrack(id: string, signal?: AbortSignal): Promise<Track> {
   return request<Track>(`/tracks/${id}`, { signal });
 }
@@ -116,10 +100,6 @@ export function updateTranscribeStems(id: string, stems: string[]): Promise<Trac
 
 export function getStems(id: string, signal?: AbortSignal): Promise<Stems> {
   return request<Stems>(`/tracks/${id}/stems`, { signal });
-}
-
-export function separateTrack(id: string): Promise<Stems> {
-  return request<Stems>(`/tracks/${id}/separate`, { method: "POST" });
 }
 
 export type TranscribeParams = {
@@ -149,14 +129,6 @@ export function getTranscriptionDefaults(signal?: AbortSignal): Promise<Transcri
 
 export function getTranscription(id: string, signal?: AbortSignal): Promise<Transcription> {
   return request<Transcription>(`/tracks/${id}/transcription`, { signal });
-}
-
-export function transcribeTrack(id: string, params: TranscribeParams): Promise<Transcription> {
-  return request<Transcription>(`/tracks/${id}/transcribe`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ params }),
-  });
 }
 
 export type Level = "beginner" | "intermediate" | "advanced";
@@ -203,6 +175,84 @@ export function arrangeTrack(id: string, params: PostprocessParams): Promise<Arr
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
+}
+
+export type JobStatus = "queued" | "running" | "done" | "error" | "cancelled";
+
+export type Job = {
+  id: string;
+  label: string;
+  source: "upload" | "youtube" | "track";
+  track_id: string | null;
+  status: JobStatus;
+  step: string;
+  progress: number;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  finished_at: string | null;
+};
+
+export type ProcessOptions = {
+  until?: "ingest" | "separate" | "transcribe";
+  stems?: string[];
+  transcribe?: TranscribeParams;
+  postprocess?: PostprocessParams;
+};
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+export function createYoutubeJob(url: string, options: ProcessOptions = {}): Promise<Job> {
+  return request<Job>("/jobs/youtube", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ url, options }),
+  });
+}
+
+export function createUploadJob(file: File, options: ProcessOptions = {}): Promise<Job> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("options", JSON.stringify(options));
+  return request<Job>("/jobs/upload", { method: "POST", body: form });
+}
+
+export function createTrackJob(id: string, options: ProcessOptions): Promise<Job> {
+  return request<Job>(`/tracks/${id}/jobs`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ options }),
+  });
+}
+
+export function listJobs(
+  filter: { trackId?: string; active?: boolean } = {},
+  signal?: AbortSignal,
+): Promise<Job[]> {
+  const params = new URLSearchParams();
+  if (filter.trackId) params.set("track_id", filter.trackId);
+  if (filter.active) params.set("active", "true");
+  return request<Job[]>(`/jobs?${params}`, { signal });
+}
+
+export function getJob(id: string): Promise<Job> {
+  return request<Job>(`/jobs/${id}`);
+}
+
+export function cancelJob(id: string): Promise<Job> {
+  return request<Job>(`/jobs/${id}/cancel`, { method: "POST" });
+}
+
+export function jobEventsUrl(id: string): string {
+  return `${API_BASE}/jobs/${id}/events`;
+}
+
+export async function deleteTrack(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/tracks/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body: unknown = await res.json().catch(() => null);
+    throw new ApiError(errorMessage(body, res.status), res.status, null);
+  }
 }
 
 export function describeDevice(device: DeviceInfo): string {

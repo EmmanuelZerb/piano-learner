@@ -196,6 +196,8 @@ def transcribe_stems(
     cached: list[str] = []
     transcriptions: list[StemTranscription] = []
     for i, stem in enumerate(stems):
+        if on_progress:  # aussi un point d'annulation avant chaque stem
+            on_progress(i / len(stems))
         key = cache_key(stem, params.engine_for(stem), params.params_for(stem))
         path = cache_dir / f"{key}.json"
         if path.exists():

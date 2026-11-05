@@ -6,3 +6,7 @@ class PipelineError(Exception):
         self.code = code
         self.message = message
         self.status_code = status_code
+
+
+class Cancelled(Exception):
+    """Levée par un callback de progression pour interrompre une étape en cours."""

@@ -72,7 +72,7 @@ def test_youtube_import_with_mocked_download(
 ):
     source = make_audio("yt.m4a", seconds=1)
 
-    def fake_download(video_id: str, work_dir: Path, max_duration_s: float):
+    def fake_download(video_id: str, work_dir: Path, max_duration_s: float, on_progress=None):
         shutil.copy(source, work_dir / "source.m4a")
         (work_dir / "source.jpg").write_bytes(b"\xff\xd8\xff\xe0fakejpeg")
         info = {"title": "Clip officiel", "artist": "Artiste", "uploader": "Chaîne"}

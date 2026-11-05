@@ -2,22 +2,18 @@
 
 import { useEffect, useState } from "react";
 
-import {
-  getStems,
-  mediaUrl,
-  separateTrack,
-  updateTranscribeStems,
-  type Stems,
-  type Track,
-} from "@/lib/api";
+import { getStems, mediaUrl, updateTranscribeStems, type Stems, type Track } from "@/lib/api";
 import { isTranscribable, STEM_LABELS, STEM_ORDER, toggleStem } from "@/lib/stems";
 
-type Props = { track: Track; onTrackChange: (track: Track) => void };
+type Props = {
+  track: Track;
+  onTrackChange: (track: Track) => void;
+  busy: boolean; // une tâche tourne déjà sur ce morceau
+  onSeparate: () => void;
+};
 
-export function StemsPanel({ track, onTrackChange }: Props) {
+export function StemsPanel({ track, onTrackChange, busy, onSeparate }: Props) {
   const [stems, setStems] = useState<Stems | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [info, setInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,24 +25,6 @@ export function StemsPanel({ track, onTrackChange }: Props) {
       });
     return () => controller.abort();
   }, [track.id]);
-
-  async function runSeparation() {
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await separateTrack(track.id);
-      setStems(result);
-      setInfo(
-        result.cached
-          ? "Pistes déjà calculées (cache)."
-          : `Séparation terminée en ${result.elapsed_s} s.`,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function toggle(stem: string) {
     const next = toggleStem(track.transcribe_stems, stem);
@@ -73,22 +51,15 @@ export function StemsPanel({ track, onTrackChange }: Props) {
         </div>
         {stems && !stems.available && (
           <button
-            onClick={runSeparation}
+            onClick={onSeparate}
             disabled={busy}
             className="shrink-0 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
           >
-            {busy ? "Séparation…" : "Séparer les pistes"}
+            Séparer les pistes
           </button>
         )}
       </div>
 
-      {busy && (
-        <p className="mb-4 text-sm text-zinc-500">
-          Demucs ({stems?.model}) travaille : environ 30 s sur GPU pour 3 min de musique, plusieurs
-          minutes sur CPU.
-        </p>
-      )}
-      {info && <p className="mb-4 text-sm text-emerald-600">{info}</p>}
       {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
 
       <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">

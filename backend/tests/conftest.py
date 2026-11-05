@@ -1,6 +1,6 @@
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -18,8 +18,9 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-def client(settings: Settings) -> TestClient:
-    return TestClient(create_app(settings))
+def client(settings: Settings) -> Iterator[TestClient]:
+    with TestClient(create_app(settings)) as test_client:  # lance le cycle de vie (worker)
+        yield test_client
 
 
 @pytest.fixture
