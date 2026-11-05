@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { HealthStatus } from "@/components/HealthStatus";
 import { ImportPanel } from "@/components/ImportPanel";
-import { TrackList } from "@/components/TrackList";
+import { LibraryView } from "@/components/LibraryView";
 
 export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -25,7 +25,7 @@ export default function Home() {
 
       <section className="rounded-xl border border-zinc-200 p-6 dark:border-zinc-800">
         <h2 className="mb-2 font-medium">Bibliothèque</h2>
-        <TrackList refreshKey={refreshKey} />
+        <LibraryView refreshKey={refreshKey} />
       </section>
 
       <details className="rounded-xl border border-zinc-200 p-6 dark:border-zinc-800">

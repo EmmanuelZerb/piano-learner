@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PlayerControls, type PlayerActions } from "@/components/player/PlayerControls";
+import { deleteSelected, EditorPanel } from "@/components/player/EditorPanel";
 import { PracticePanel, PracticeSummaryDialog } from "@/components/player/PracticePanel";
 import { useMidi } from "@/components/player/useMidi";
 import { usePractice } from "@/components/player/usePractice";
@@ -25,7 +26,7 @@ import {
   parseArrangement,
   type ArrangementData,
 } from "@/lib/player/notes";
-import { drawFrame, keyboardHeight } from "@/lib/player/renderer";
+import { drawFrame, keyboardHeight, noteAtPoint } from "@/lib/player/renderer";
 import { isTypingTarget, shortcutFor, type ShortcutAction } from "@/lib/player/shortcuts";
 import { usePlayerStore, ZOOM_MAX, ZOOM_MIN } from "@/lib/player/store";
 
@@ -151,7 +152,7 @@ export function PlayerView() {
           set({ status: "error", error: err instanceof Error ? err.message : String(err) });
       });
     return () => controller.abort();
-  }, [arrangement, store.level, samplesReady, set]);
+  }, [arrangement, store.level, store.levelReload, samplesReady, set]);
 
   // --- Réglages du store → moteur -------------------------------------------------------------
   const loop = useMemo(
@@ -241,6 +242,11 @@ export function PlayerView() {
           return set({ showNames: !s.showNames });
         case "toggle-stats":
           return set({ showStats: !s.showStats });
+        case "toggle-edit":
+          if (!s.editing) actions.pause();
+          return set({ editing: !s.editing, selected: null });
+        case "delete-selected":
+          return void deleteSelected(id).catch(() => set({ error: "Suppression impossible." }));
         case "toggle-count-in":
           return set({ countIn: !s.countIn });
         case "toggle-hand":
@@ -256,7 +262,7 @@ export function PlayerView() {
           });
       }
     },
-    [actions, loop, set],
+    [actions, id, loop, set],
   );
 
   useEffect(() => {
@@ -357,6 +363,7 @@ export function PlayerView() {
         loop: normalizeLoop(s.loopA, s.loopB, data.duration),
         countIn: countLeft === null ? null : Math.ceil(countLeft / engine.beatPeriod()),
         practice: practiceFrame,
+        selected: s.editing ? s.selected : null,
       });
       if (progressRef.current) progressRef.current.style.width = `${(time / data.duration) * 100}%`;
       if (timeRef.current) timeRef.current.textContent = `${clock(time)} / ${clock(data.duration)}`;
@@ -390,6 +397,31 @@ export function PlayerView() {
       pointerPitch = null;
     };
     const onDown = (event: PointerEvent) => {
+      const s = usePlayerStore.getState();
+      const engine = engineRef.current;
+      const data = dataRef.current;
+      if (s.editing && engine && data) {
+        const rect = canvas.getBoundingClientRect();
+        const view = {
+          ...size,
+          layout,
+          data,
+          time: engine.songTime(),
+          pixelsPerSecond: s.pixelsPerSecond,
+        };
+        const note = noteAtPoint(view, event.clientX - rect.left, event.clientY - rect.top);
+        if (note || event.clientY - rect.top < size.height - keyboardHeight(size.width)) {
+          s.set({
+            selected: note && {
+              pitch: note.pitch,
+              start: note.start,
+              end: note.end,
+              hand: note.hand,
+            },
+          });
+          return;
+        }
+      }
       const pitch = pitchAt(event);
       if (pitch === null) return;
       try {
@@ -449,6 +481,7 @@ export function PlayerView() {
         timeRef={timeRef}
         accompanimentChoices={Object.keys(sources)}
         disabled={!samplesReady || duration === 0}
+        editor={<EditorPanel trackId={id} />}
         practice={
           <PracticePanel
             trackId={id}

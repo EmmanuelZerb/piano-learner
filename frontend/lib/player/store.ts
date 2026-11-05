@@ -31,8 +31,14 @@ export type PlayerState = {
   inputSound: boolean; // jouer le son des notes de l'utilisateur (clavier sans haut-parleur, souris)
   score: PracticeScore;
   summary: PracticeSummary | null;
+  // Éditeur
+  editing: boolean;
+  selected: SelectedNote | null;
+  levelReload: number; // incrémenté après une correction pour recharger le niveau
   set: (patch: Partial<Omit<PlayerState, "set">>) => void;
 };
+
+export type SelectedNote = { pitch: number; start: number; end: number; hand: Hand };
 
 export type PracticeSummary = PracticeScore & {
   accuracy: number;
@@ -62,6 +68,9 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   inputSound: true,
   score: { hits: 0, wrongs: 0, misses: 0 },
   summary: null,
+  editing: false,
+  selected: null,
+  levelReload: 0,
   set: (patch) => set(patch),
 }));
 

@@ -38,6 +38,27 @@ class Key:
         """Notation courte compatible avec les key_signature de mido : « Eb », « F#m »."""
         return NAMES[self.tonic] if self.mode == "major" else f"{MINOR_NAMES[self.tonic]}m"
 
+    @classmethod
+    def from_name(cls, name: str) -> "Key":
+        minor = name.endswith("m")
+        tonic = name[:-1] if minor else name
+        return cls(pitch_class(tonic), "minor" if minor else "major")
+
+
+def pitch_class(name: str) -> int:
+    """« Eb » → 3, « F# » → 6 (noms produits par ce module)."""
+    for names in (NAMES, MINOR_NAMES):
+        if name in names:
+            return names.index(name)
+    raise ValueError(f"Note inconnue : {name}")
+
+
+def chord_root(name: str) -> int | None:
+    """Fondamentale d'un nom d'accord produit par `name_chord` (« F#m7 » → 6)."""
+    if name == NO_CHORD:
+        return None
+    return pitch_class(name[:2] if len(name) > 1 and name[1] in "#b" else name[:1])
+
 
 @dataclass(frozen=True)
 class Chord:

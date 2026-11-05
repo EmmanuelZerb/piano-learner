@@ -198,9 +198,29 @@ export function ArrangementPanel({ trackId }: { trackId: string }) {
                 <br />
                 Gauche : {lvl.left_notes} notes (≤ {lvl.max_polyphony_left} à la fois)
               </p>
-              <a href={mediaUrl(lvl.midi_url)} className="mt-2 inline-block text-sm underline">
-                Télécharger le MIDI
-              </a>
+              {lvl.edits > 0 && (
+                <p className="mt-1 text-xs text-zinc-500">
+                  {lvl.edits} correction(s) manuelle(s)
+                  {lvl.unmatched_edits > 0 && (
+                    <span className="text-amber-600">
+                      {" "}
+                      dont {lvl.unmatched_edits} sans effet après le recalcul
+                    </span>
+                  )}
+                </p>
+              )}
+              <div className="mt-2 flex gap-3 text-sm">
+                <a href={mediaUrl(lvl.midi_url)} className="underline">
+                  MIDI
+                </a>
+                <a
+                  href={mediaUrl(lvl.musicxml_url)}
+                  className="underline"
+                  title="Partition pour MuseScore"
+                >
+                  MusicXML
+                </a>
+              </div>
             </li>
           ))}
         </ul>

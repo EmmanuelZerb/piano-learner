@@ -27,6 +27,7 @@ type Props = {
   accompanimentChoices: string[];
   disabled: boolean;
   practice: ReactNode;
+  editor: ReactNode;
 };
 
 const ACCOMPANIMENT_LABELS: Record<string, string> = {
@@ -62,6 +63,7 @@ export function PlayerControls({
   timeRef,
   accompanimentChoices,
   practice,
+  editor,
 }: Props) {
   const s = usePlayerStore();
   const playing = s.status === "playing";
@@ -189,6 +191,16 @@ export function PlayerControls({
           >
             Notes
           </Toggle>
+          <Toggle
+            on={s.editing}
+            onClick={() => {
+              if (!s.editing) actions.pause();
+              s.set({ editing: !s.editing, selected: null });
+            }}
+            title="Corriger des notes (E)"
+          >
+            Éditer
+          </Toggle>
         </div>
 
         <label className="flex items-center gap-2">
@@ -203,6 +215,15 @@ export function PlayerControls({
           />
         </label>
       </div>
+
+      {s.editing && (
+        <div className="rounded-lg border border-zinc-700 p-3">
+          <p className="mb-2 text-xs font-medium text-zinc-200">
+            Édition du niveau (corrections conservées après un recalcul)
+          </p>
+          {editor}
+        </div>
+      )}
 
       <details className="text-xs text-zinc-400" open={s.practiceMode !== "off" || undefined}>
         <summary className="cursor-pointer">

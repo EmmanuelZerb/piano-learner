@@ -14,8 +14,8 @@ Application web locale et personnelle. Elle prend un audio (fichier ou URL YouTu
 | 5 — API et tâches asynchrones (SSE, annulation, suppression) | ✅ |
 | 6 — Lecteur « notes qui tombent » (Canvas, Tone.js, accompagnement) | ✅ |
 | 7 — Mode entraînement (MIDI, attente, libre, score, historique) | ✅ |
-| 8 — Bibliothèque et export (MusicXML, éditeur) | ⏳ à faire |
-| 9 | Qualité et finitions |
+| 8 — Bibliothèque, export MusicXML, éditeur de corrections | ✅ |
+| 9 — Qualité et finitions | ⏳ à faire |
 
 ## Architecture
 
@@ -33,7 +33,9 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/api/tracks.py      Routes /tracks : upload, youtube, liste, détail, PATCH sélection, audio, miniature
   app/api/stems.py       Routes /tracks/{id}/separate, /stems, /stems/{name}
   app/api/transcription.py  /tracks/{id}/transcribe (sépare si besoin + régénère les niveaux), /transcription, /midi/{f}.mid, /transcription/defaults
-  app/api/arrangement.py /tracks/{id}/arrange (post-traitement seul), /arrangement, /arrangement/{niveau}.mid|.json, /arrangement/defaults
+  app/api/arrangement.py /tracks/{id}/arrange (post-traitement seul), /arrangement, /arrangement/{niveau}.mid|.json,
+                         /arrangement/{niveau}/edits (GET/POST/DELETE ?last=), /export/{niveau}.musicxml, /arrangement/defaults
+  app/api/library.py     GET /library : morceaux + étape (importé → prêt à jouer), niveaux, progression, tâche active
   app/api/practice.py    POST/GET /tracks/{id}/practice : séances d'entraînement, meilleur score, temps total
   app/api/jobs.py        /jobs/youtube, /jobs/upload, /tracks/{id}/jobs, /jobs, /jobs/{id}, /jobs/{id}/events (SSE), /jobs/{id}/cancel
   app/api/files.py       serve_track_file : fichiers générés, protégé contre la sortie du dossier
@@ -49,7 +51,9 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
   app/pipeline/hands.py     Partage des mains par coût (heuristique isolée, remplaçable)
   app/pipeline/harmony.py   Tonalité (Krumhansl-Schmuckler), accords par temps (gabarits)
   app/pipeline/difficulty.py  Niveaux débutant / intermédiaire / avancé, cap_polyphony
-  app/pipeline/postprocess.py PostprocessParams, arrange(), écriture .mid/.json/manifest
+  app/pipeline/postprocess.py PostprocessParams, arrange(), base + corrections → .json/.mid/manifest
+  app/pipeline/edits.py     Corrections manuelles (delete, pitch, hand, split) rejouées sur la base
+  app/pipeline/notation.py  Export MusicXML (music21) : 2 portées, armure, tempo, double croche
   scripts/doctor.py      Diagnostic des prérequis
   scripts/check_ml_stack.py  Test de cohabitation et d'inférence des 3 modèles ML
   tests/                 pytest ; tests/synth.py = audio de test (synthé additif, Salamander, F1 mir_eval)
@@ -59,16 +63,17 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
     cache/stems/{wav_sha256}/htdemucs_6s/  {stem}.flac + manifest.json (écrit en dernier = cache complet)
     cache/transcriptions/{wav_sha256}/{stem}-{moteur}-{hash params}.json  notes brutes
     tracks/{id}/midi/    {stem}.mid, merged.mid, manifest.json (dernière transcription)
-    tracks/{id}/arrangement/  {beginner,intermediate,advanced}.mid/.json + manifest.json
+    tracks/{id}/arrangement/  {niveau}.base.json (calculé), {niveau}.json/.mid (corrigé), edits.json,
+                              {niveau}.musicxml (généré à la demande), manifest.json
     cache/analysis/{wav_sha256}/beats.json  grille des temps
     models/salamander-test/  échantillons de piano pour le test ByteDance
     tmp/                 dossiers de travail (vidés automatiquement)
     models/              checkpoints (ByteDance…)
 frontend/                Next.js 16 (App Router), React 19, TS strict, Tailwind 4, vitest
   app/                   Pages (/, /tracks/[id], /tracks/[id]/play)
-  components/            Panneaux de la page morceau, JobProgress, Slider
+  components/            LibraryView (accueil), panneaux de la page morceau, JobProgress, Slider
   components/player/     PlayerView (chargement, boucle rAF, raccourcis, clavier à la souris), PlayerControls,
-                         usePractice (arbitre, attente, séance), useMidi, PracticePanel (+ bilan)
+                         usePractice (arbitre, attente, séance), useMidi, PracticePanel (+ bilan), EditorPanel
   lib/player/            engine.ts (Tone), renderer.ts (Canvas), notes.ts, keyboard.ts, practice.ts
                          (PracticeJudge, waitSteps), midi.ts (Web MIDI),
                          shortcuts.ts, store.ts (Zustand), samples.mjs (liste Salamander)
@@ -175,6 +180,17 @@ Les tests `network` et `ml` sont exclus par défaut. Pour les lancer : `uv run p
   - Précision = justes / (justes + fausses + manquées).
 - **Séance** : chronométrée pendant la lecture et l'attente. « Terminer la séance » (ou la fin du morceau) affiche le bilan, puis l'enregistre via POST /practice si au moins une note a été jugée.
 - **Position à l'arrêt** : `songTime()` lit `transport.ticks` (à « maintenant ») quand le Transport n'avance pas. Avant ce correctif, un saut fait en pause n'était visible qu'après l'anticipation de Tone (≈ 100 ms), et A/B enregistraient une position périmée.
+- **Corrections (éditeur)** :
+  - Une note est désignée par sa hauteur et son attaque (±40 ms). Les opérations sont rejouées dans l'ordre sur `{niveau}.base.json`, donc elles survivent à un recalcul du post-traitement.
+  - Une correction qui ne trouve plus sa note est ignorée et comptée (`unmatched_edits`, signalée sur la page du morceau).
+  - « split » réassigne les mains sur [début, fin[ (boucle A-B) selon une hauteur de partage.
+  - Dans le lecteur : touche E ou bouton « Éditer » (met en pause), clic sur une note (`noteAtPoint`, les notes sur touches noires sont prioritaires), ±½ ton, ±octave, main, Suppr. Puis rechargement du niveau via `levelReload`.
+- **MusicXML** :
+  - Positions en temps sur la grille détectée, avec les mêmes temps de levée que le MIDI, arrondies à la double croche.
+  - `chordify(addTies=True)` par main transforme les chevauchements en accords liés.
+  - Généré à la demande (environ 7 s pour le niveau avancé de 3 min), puis mis en cache jusqu'à la prochaine modification du niveau. 3 min à 100 BPM donnent bien 75 mesures.
+  - Les triolets sont arrondis à la double croche.
+- **Bibliothèque** : l'accueil utilise `/library`, avec recherche titre/artiste insensible aux accents (`lib/library.ts`), étape de traitement, progression d'entraînement et tâche en cours.
 - **Diagnostic** : `window.__pianoEngine` (développement uniquement) et `window.__playerStats`.
 - **Vérifié sans clavier MIDI**, par des clics simulés sur le clavier à l'écran : attente en boucle 0–5 s (29 étapes, arrêt à chacune, reprise et nouvelle attente après chaque tour), fausse note sans déblocage, mode libre (justes/fausses/manquées), séance enregistrée.
 - **Mesures du lecteur** (morceau test, niveau avancé, 60 %, voix et batterie en accompagnement) :

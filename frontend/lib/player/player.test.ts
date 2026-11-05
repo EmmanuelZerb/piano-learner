@@ -11,7 +11,8 @@ import {
   sustainedEnds,
   type PlayerNote,
 } from "./notes";
-import { shortcutFor } from "./shortcuts";
+import { keyboardHeight, noteAtPoint } from "./renderer";
+import { SHORTCUT_HELP, shortcutFor } from "./shortcuts";
 
 const key = (k: string, shiftKey = false) => ({
   key: k,
@@ -113,5 +114,40 @@ describe("raccourcis", () => {
     expect(shortcutFor(key("f"))).toEqual({ type: "toggle-stats" });
     expect(shortcutFor(key("x"))).toBeNull();
     expect(shortcutFor({ ...key("a"), ctrlKey: true })).toBeNull();
+  });
+});
+
+describe("sélection d'une note à la souris", () => {
+  const data = parseArrangement(raw);
+  const view = {
+    width: 1040,
+    height: 400,
+    layout: keyboardLayout(1040),
+    data,
+    time: 0,
+    pixelsPerSecond: 100,
+  };
+  const fall = 400 - keyboardHeight(1040);
+  const center = (pitch: number) => {
+    const k = keyFor(view.layout, pitch)!;
+    return k.x + k.width / 2;
+  };
+
+  it("trouve la note sous le pointeur", () => {
+    // 64 (Mi4) entre 1,0 s et 1,5 s → entre 100 et 150 px au-dessus du clavier.
+    expect(noteAtPoint(view, center(64), fall - 120)?.pitch).toBe(64);
+    expect(noteAtPoint(view, center(64), fall - 160)).toBeNull(); // après la fin
+    expect(noteAtPoint(view, center(48), fall - 250)?.pitch).toBe(48); // note longue
+  });
+
+  it("ignore le clavier", () => {
+    expect(noteAtPoint(view, center(48), fall + 10)).toBeNull();
+  });
+});
+
+describe("aide des raccourcis", () => {
+  it("n'a pas de touche en double", () => {
+    const keys = SHORTCUT_HELP.map(([k]) => k);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });

@@ -40,6 +40,7 @@ export type FrameInput = {
   loop: { a: number; b: number } | null;
   countIn: number | null; // temps restants du décompte
   practice: PracticeOverlay | null;
+  selected: NoteRef | null; // note sélectionnée dans l'éditeur
   stats: {
     fps: number;
     minFps: number;
@@ -48,6 +49,30 @@ export type FrameInput = {
     playedSeconds: number;
   } | null;
 };
+
+/** Désigne une note par sa hauteur et son attaque (comme les corrections côté serveur). */
+export type NoteRef = { pitch: number; start: number };
+
+export function sameNote(a: NoteRef, b: NoteRef): boolean {
+  return a.pitch === b.pitch && Math.abs(a.start - b.start) < 1e-3;
+}
+
+/** Note qui tombe sous un point de la zone de chute (null sur le clavier ou dans le vide).
+ * Les notes des touches noires sont dessinées par-dessus : elles sont testées en premier. */
+export function noteAtPoint(
+  view: Pick<FrameInput, "width" | "height" | "layout" | "data" | "time" | "pixelsPerSecond">,
+  x: number,
+  y: number,
+): PlayerNote | null {
+  const fallHeight = view.height - keyboardHeight(view.width);
+  if (y < 0 || y >= fallHeight) return null;
+  const t = view.time + (fallHeight - y) / view.pixelsPerSecond;
+  const hits = notesInWindow(view.data, t, t + 1e-6).filter((n) => {
+    const key = keyFor(view.layout, n.pitch);
+    return n.start <= t && key !== undefined && x >= key.x && x < key.x + key.width;
+  });
+  return hits.find((n) => keyFor(view.layout, n.pitch)?.black) ?? hits[0] ?? null;
+}
 
 export function keyboardHeight(width: number): number {
   return Math.round(Math.min(150, Math.max(70, (width / 52) * 5.2)));
@@ -110,6 +135,12 @@ function drawNotes(input: FrameInput, fallHeight: number): void {
     if (judged === 1) {
       ctx.strokeStyle = "#fef08a";
       ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    if (input.selected && sameNote(input.selected, note)) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 3;
       ctx.stroke();
     }
     if (showNames && height > 14 && key.width > 9) {

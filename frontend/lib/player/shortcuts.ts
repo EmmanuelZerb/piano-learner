@@ -9,6 +9,8 @@ export type ShortcutAction =
   | { type: "toggle-metronome" }
   | { type: "toggle-names" }
   | { type: "toggle-stats" }
+  | { type: "toggle-edit" }
+  | { type: "delete-selected" }
   | { type: "toggle-count-in" }
   | { type: "toggle-hand"; hand: "L" | "R" }
   | { type: "level"; index: number }
@@ -27,6 +29,8 @@ export const SHORTCUT_HELP: [string, string][] = [
   ["C", "décompte avant lecture"],
   ["N", "nom des notes"],
   ["+ / -", "zoom vertical"],
+  ["E", "mode édition (cliquer une note pour la corriger)"],
+  ["Suppr", "supprimer la note sélectionnée (mode édition)"],
   ["F", "fluidité et dérive (diagnostic)"],
 ];
 
@@ -57,6 +61,8 @@ export function shortcutFor(event: KeyInput): ShortcutAction | null {
       return { type: "go-start" };
     case "Escape":
       return { type: "clear-loop" };
+    case "Delete":
+      return { type: "delete-selected" };
     case "+":
     case "=":
       return { type: "zoom-by", factor: 1.25 };
@@ -78,6 +84,8 @@ export function shortcutFor(event: KeyInput): ShortcutAction | null {
       return { type: "toggle-names" };
     case "f":
       return { type: "toggle-stats" };
+    case "e":
+      return { type: "toggle-edit" };
     case "c":
       return { type: "toggle-count-in" };
     case "g":

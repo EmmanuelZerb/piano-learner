@@ -155,8 +155,11 @@ export type Arrangement = {
     left_notes: number;
     max_polyphony_right: number;
     max_polyphony_left: number;
+    edits: number;
+    unmatched_edits: number;
     midi_url: string;
     notes_url: string;
+    musicxml_url: string;
   }[];
   params: PostprocessParams | null;
 };
@@ -294,6 +297,46 @@ export function getPracticeHistory(
   signal?: AbortSignal,
 ): Promise<PracticeHistory> {
   return request<PracticeHistory>(`/tracks/${trackId}/practice`, { signal });
+}
+
+// --- Bibliothèque ---------------------------------------------------------------------------
+
+export type LibraryItem = Track & {
+  stage: "imported" | "separated" | "transcribed" | "arranged";
+  levels: Level[];
+  sessions: number;
+  best_accuracy: number | null;
+  practice_seconds: number;
+  last_practiced_at: string | null;
+  last_level: Level | null;
+  active_job: Job | null;
+};
+
+export function getLibrary(signal?: AbortSignal): Promise<LibraryItem[]> {
+  return request<LibraryItem[]>("/library", { signal });
+}
+
+// --- Éditeur --------------------------------------------------------------------------------
+
+export type NoteEdit =
+  | { op: "delete"; pitch: number; start: number }
+  | { op: "pitch"; pitch: number; start: number; new_pitch: number }
+  | { op: "hand"; pitch: number; start: number; hand: "L" | "R" }
+  | { op: "split"; start: number; end: number; split: number };
+
+const editsUrl = (trackId: string, level: Level) => `/tracks/${trackId}/arrangement/${level}/edits`;
+
+export function addEdits(trackId: string, level: Level, edits: NoteEdit[]): Promise<Arrangement> {
+  return request<Arrangement>(editsUrl(trackId, level), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ edits }),
+  });
+}
+
+/** `last` : annule seulement la dernière correction. */
+export function removeEdits(trackId: string, level: Level, last: boolean): Promise<Arrangement> {
+  return request<Arrangement>(`${editsUrl(trackId, level)}?last=${last}`, { method: "DELETE" });
 }
 
 export function describeDevice(device: DeviceInfo): string {

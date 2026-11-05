@@ -13,14 +13,16 @@ from pydantic import BaseModel, Field
 
 from app.pipeline.cleanup import clean
 from app.pipeline.difficulty import LEVELS, build_levels, by_hand
+from app.pipeline.edits import apply_edits, load_edits
 from app.pipeline.hands import split_hands
-from app.pipeline.harmony import Chord, Key, detect_chords, detect_key
+from app.pipeline.harmony import Chord, Key, chord_root, detect_chords, detect_key
 from app.pipeline.midi_io import write_arrangement_midi
 from app.pipeline.notes import Note, Pedal, StemTranscription, max_polyphony
 from app.pipeline.rhythm import BeatGrid, Division, detect_beats, quantize
 
 MANIFEST = "manifest.json"
 BEATS_FILE = "beats.json"
+BASE_SUFFIX = ".base.json"  # niveau tel que calculé, avant corrections manuelles
 
 
 class PostprocessParams(BaseModel):
@@ -56,6 +58,19 @@ class Arrangement:
                 for n in self.notes
             ],
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Arrangement":
+        return cls(
+            level=data["level"],
+            notes=[Note(int(p), float(s), float(e), int(v), h) for p, s, e, v, h in data["notes"]],
+            pedals=[Pedal(float(s), float(e)) for s, e in data["pedals"]],
+            grid=BeatGrid(float(data["tempo"]), [float(b) for b in data["beats"]]),
+            key=Key.from_name(data["key"]) if data.get("key") else None,
+            chords=[
+                Chord(float(s), float(e), name, chord_root(name)) for s, e, name in data["chords"]
+            ],
+        )
 
     def summary(self) -> dict[str, object]:
         right, left = by_hand(self.notes, "R"), by_hand(self.notes, "L")
@@ -113,18 +128,45 @@ def arrange(
 def write_arrangements(
     arrangements: dict[str, Arrangement], params: PostprocessParams, out_dir: Path
 ) -> dict[str, object]:
+    """Écrit pour chaque niveau la base calculée, puis la version corrigée (base + éditions)."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    summaries = []
     for level, arrangement in arrangements.items():
-        write_arrangement_midi(arrangement, out_dir / f"{level}.mid")
-        (out_dir / f"{level}.json").write_text(json.dumps(arrangement.to_dict()), encoding="utf-8")
+        (out_dir / f"{level}{BASE_SUFFIX}").write_text(
+            json.dumps(arrangement.to_dict()), encoding="utf-8"
+        )
+        summaries.append(materialize(out_dir, level))
     any_arrangement = next(iter(arrangements.values()))
     manifest: dict[str, object] = {
         "params": params.model_dump(),
         "tempo": round(any_arrangement.grid.tempo, 1),
         "key": any_arrangement.key.name if any_arrangement.key else None,
         "chords": len([c for c in any_arrangement.chords if c.root is not None]),
-        "levels": [a.summary() for a in arrangements.values()],
+        "levels": summaries,
     }
+    (out_dir / MANIFEST).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
+def materialize(out_dir: Path, level: str) -> dict[str, object]:
+    """Base + corrections → `{niveau}.json` et `.mid` ; l'export MusicXML est invalidé."""
+    base = json.loads((out_dir / f"{level}{BASE_SUFFIX}").read_text(encoding="utf-8"))
+    level_edits = load_edits(out_dir).get(level, [])
+    notes, unmatched = apply_edits(base["notes"], level_edits)
+    arrangement = Arrangement.from_dict({**base, "notes": notes})
+    (out_dir / f"{level}.json").write_text(json.dumps(arrangement.to_dict()), encoding="utf-8")
+    write_arrangement_midi(arrangement, out_dir / f"{level}.mid")
+    (out_dir / f"{level}.musicxml").unlink(missing_ok=True)
+    return {**arrangement.summary(), "edits": len(level_edits), "unmatched_edits": unmatched}
+
+
+def refresh_level(out_dir: Path, level: str) -> dict[str, object]:
+    """Après une correction : régénère le niveau et met à jour son résumé dans le manifest."""
+    manifest = read_manifest(out_dir)
+    if manifest is None:
+        raise FileNotFoundError(out_dir / MANIFEST)
+    summary = materialize(out_dir, level)
+    manifest["levels"] = [summary if s["level"] == level else s for s in manifest["levels"]]
     (out_dir / MANIFEST).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
