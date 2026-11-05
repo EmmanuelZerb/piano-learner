@@ -12,8 +12,9 @@ Application web locale et personnelle. Elle prend un audio (fichier ou URL YouTu
 | 3 — Transcription (ByteDance + Basic Pitch, cache par paramètres) | ✅ |
 | 4 — Post-traitement (tempo, quantification, mains, niveaux, tonalité, accords) | ✅ |
 | 5 — API et tâches asynchrones (SSE, annulation, suppression) | ✅ |
-| 6 — Lecteur « notes qui tombent » | ⏳ à faire |
-| 7–9 | voir le cahier des charges ( lecteur, entraînement, bibliothèque, finitions) |
+| 6 — Lecteur « notes qui tombent » (Canvas, Tone.js, accompagnement) | ✅ |
+| 7 — Mode entraînement (clavier MIDI) | ⏳ à faire |
+| 8–9 | voir le cahier des charges ( lecteur, entraînement, bibliothèque, finitions) |
 
 ## Architecture
 
@@ -62,8 +63,12 @@ backend/                 Python 3.11, géré par uv (pyproject.toml + uv.lock)
     tmp/                 dossiers de travail (vidés automatiquement)
     models/              checkpoints (ByteDance…)
 frontend/                Next.js 16 (App Router), React 19, TS strict, Tailwind 4, vitest
-  app/                   Pages (/, /tracks/[id])
-  components/            Composants (player/ arrivera en phase 6)
+  app/                   Pages (/, /tracks/[id], /tracks/[id]/play)
+  components/            Panneaux de la page morceau, JobProgress, Slider
+  components/player/     PlayerView (chargement, boucle rAF, raccourcis), PlayerControls
+  lib/player/            engine.ts (Tone), renderer.ts (Canvas), notes.ts, keyboard.ts,
+                         shortcuts.ts, store.ts (Zustand), samples.mjs (liste Salamander)
+  scripts/fetch-samples.mjs  Télécharge Salamander dans public/samples/ (ignoré par git)
   lib/                   Client API, audio, MIDI, stores
 package.json (racine)    Orchestration uniquement (concurrently)
 ```
@@ -133,6 +138,29 @@ Les tests `network` et `ml` sont exclus par défaut. Pour les lancer : `uv run p
 - Basic Pitch fragmente beaucoup et produit des doublons à l'octave sur la basse : c'est attendu, et le nettoyage se fait en phase 4. Sur un mixage synthétique, Demucs range les accords dans `other`, et la piste piano peut alors rester vide.
 - La piste `piano` de `htdemucs_6s` est de qualité médiocre : toujours permettre de transcrire `other`.
 - **Next.js 16** : les API diffèrent des versions connues. Lire `frontend/AGENTS.md` et `frontend/node_modules/next/dist/docs/` avant d'écrire du code Next.
+- **Lecteur — horloge** :
+  - Tout est piloté par `Tone.Transport` avec PPQ = 960 et 60 BPM de base : 1 temps = 1 s du morceau, et `ticks / PPQ` donne la position.
+  - Vitesse = `bpm × vitesse` : les notes programmées une fois dans un `Tone.Part` ne bougent pas.
+  - L'image lit `transport.getTicksAtTime(currentTime - outputLatency)` à chaque `requestAnimationFrame`. Aucun `setInterval`, donc pas de dérive par construction.
+  - `window.__playerStats` expose les images/s, la pire image et la dérive mesurée (instantanées et cumulées sur la session).
+- **Lecteur — son** :
+  - Tone.Sampler avec les échantillons Salamander (un toutes les 3 demi-tons), servis localement depuis `/samples/salamander/`.
+  - Le sustain est appliqué en prolongeant la note jusqu'au relâchement de la pédale (`sustainedEnds`). Le niveau débutant n'a pas de pédale.
+  - Main coupée : la note n'est pas jouée et elle est affichée à 25 % d'opacité.
+  - Métronome : un clic par temps détecté, accent tous les 4 temps. Décompte : 4 clics avant `transport.start`.
+- **Accompagnement** (stems ou mixage d'origine) :
+  - Buffers chargés à la demande.
+  - À 100 % de vitesse : `Tone.Player`. Sinon : `Tone.GrainPlayer`, qui change la vitesse sans changer la hauteur, avec un léger grain.
+  - Il est relancé à la bonne position à chaque lecture, saut, changement de vitesse et tour de boucle (événement `loop` du Transport).
+- **Rendu** :
+  - Canvas 2D sans React dans la boucle d'image : la position n'est pas dans le store. La barre de progression et le temps sont mis à jour par des refs.
+  - `notesInWindow` fait une recherche dichotomique, avec une marge égale à la durée de la plus longue note.
+  - Couleurs : main droite en vert, main gauche en bleu, plus foncé sur les touches noires.
+- `@tonejs/midi` n'est pas utilisé : le lecteur lit le JSON des niveaux, qui contient en plus les mains, les temps et les accords.
+- **Mesures du lecteur** (morceau test, niveau avancé, 60 %, voix et batterie en accompagnement) :
+  - Page visible : 72 images/s (la fréquence de l'écran), pire image de 15 ms. Dérive entre l'image et l'horloge audio : 3,2 ms au maximum.
+  - Onglet masqué : le navigateur bride `requestAnimationFrame` (jusqu'à 1 image/s) et l'audio. Les mesures ne valent donc que page visible.
+  - La touche F affiche ces indicateurs en direct sur le lecteur.
 - Le chemin du projet contient un espace (`D:\Logiciel Piano`) : toujours mettre les chemins entre guillemets dans les scripts.
 
 ## Conventions

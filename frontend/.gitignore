@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Échantillons audio téléchargés (npm run fetch:samples)
+/public/samples/

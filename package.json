@@ -3,7 +3,7 @@
   "private": true,
   "description": "Orchestration du monorepo (backend Python via uv + frontend Next.js)",
   "scripts": {
-    "setup": "uv --directory backend sync && npm --prefix frontend install",
+    "setup": "uv --directory backend sync && npm --prefix frontend install && npm --prefix frontend run fetch:samples",
     "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "uv --directory backend run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
     "dev:web": "npm --prefix frontend run dev",

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { Slider } from "@/components/Slider";
@@ -79,13 +80,23 @@ export function ArrangementPanel({ trackId }: { trackId: string }) {
             </p>
           )}
         </div>
-        <button
-          onClick={run}
-          disabled={busy || !params}
-          className="shrink-0 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
-        >
-          {busy ? "Calcul…" : "Recalculer"}
-        </button>
+        <div className="flex shrink-0 gap-2">
+          <button
+            onClick={run}
+            disabled={busy || !params}
+            className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium disabled:opacity-40 dark:border-zinc-700"
+          >
+            {busy ? "Calcul…" : "Recalculer"}
+          </button>
+          {result?.available && (
+            <Link
+              href={`/tracks/${trackId}/play`}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white"
+            >
+              ▶ Jouer
+            </Link>
+          )}
+        </div>
       </div>
 
       {params && (

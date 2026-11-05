@@ -29,7 +29,7 @@ npm run check:ml   # optionnel : télécharge les modèles (~250 Mo) et teste un
 npm run dev
 ```
 
-- Interface : http://localhost:3000
+- Interface : http://localhost:3000 (importer un fichier ou une URL YouTube, suivre le traitement, puis « ▶ Jouer » sur la page du morceau)
 - API : http://127.0.0.1:8000 (documentation interactive sur `/docs`)
 
 ## Développement
